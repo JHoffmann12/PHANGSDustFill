@@ -1,2 +1,0 @@
-# JWST
-JWST Summer Work
