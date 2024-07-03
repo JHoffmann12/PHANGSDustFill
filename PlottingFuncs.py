@@ -67,11 +67,16 @@ def circular_vector_average(angles):
     """
     Calculate the circular mean of angles.
     """
+    # Remove NaN values from angles
+    angles = np.array(angles)
+    angles = angles[~np.isnan(angles)]
+
     sin_sum = np.sum(np.sin(np.radians(angles)))
     cos_sum = np.sum(np.cos(np.radians(angles)))
-    return np.degrees(np.arctan2(sin_sum, cos_sum))
 
-def plot_arctan_with_smoothing(Gx, Gy, filter_size=5, save_path=None):
+    return np.degrees(np.arctan(sin_sum/cos_sum))
+
+def plot_arctan_with_smoothing(Gx, Gy, mask, filter_size=5, save_path=None):
     """
     Plot smoothed arctan(Gy / Gx) values of every pixel normalized and represented with a custom color spectrum.
     Include a scale bar to show the color mapping.
@@ -84,11 +89,13 @@ def plot_arctan_with_smoothing(Gx, Gy, filter_size=5, save_path=None):
     """
     # Calculate the angle map in degrees
     angle_map = -1*np.degrees(np.arctan(Gy/Gx))
+    copy_angled_map = copy.deepcopy(angle_map)
+    copy_angled_map[mask == 0] = np.nan
 
     # Apply circular vector average in a filter_size x filter_size window
-    smoothed_angle_map = generic_filter(angle_map, circular_vector_average, size=filter_size, mode='reflect')
+    smoothed_angle_map = generic_filter(copy_angled_map, circular_vector_average, size=filter_size, mode='reflect')
 
-   # Create custom colormap with specific colors and range
+    # Create custom colormap with specific colors and range
     custom_palette = [
         (0, 0, 0),                # -90 degrees: black
         (30/255, 144/255, 255/255),  # -72 degrees: dark blue
@@ -104,15 +111,21 @@ def plot_arctan_with_smoothing(Gx, Gy, filter_size=5, save_path=None):
     cmap.set_under(color='lightgray')  # Values less than -90 degrees mapped to light gray
     norm = mcolors.Normalize(vmin=-90, vmax=90)
 
-    #
-    # Plotting
+    # Plotting for display
     plt.figure(figsize=(8, 6))
     plt.imshow(smoothed_angle_map, cmap=cmap, norm=norm)
     plt.colorbar(label='Angle (degrees)')
     plt.title('Smoothed Arctan of Gy / Gx')
     plt.axis('off')
-    
-    # Save the plot if a save path is provided
-    if save_path:
-        plt.savefig(save_path)
     plt.show()
+
+    # Plotting for saving without the scale bar
+    if save_path:
+        plt.figure(figsize=(8, 6))
+        plt.imshow(smoothed_angle_map, cmap=cmap, norm=norm)
+        plt.title('Smoothed Arctan of Gy / Gx')
+        plt.axis('off')
+        plt.savefig(save_path, bbox_inches='tight', pad_inches=0)
+        plt.close()
+
+    return smoothed_angle_map
