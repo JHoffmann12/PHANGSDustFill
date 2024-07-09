@@ -119,13 +119,23 @@ def plot_arctan_with_smoothing(Gx, Gy, mask, filter_size=5, save_path=None):
     plt.axis('off')
     plt.show()
 
-    # Plotting for saving without the scale bar
-    if save_path:
-        plt.figure(figsize=(8, 6))
-        plt.imshow(smoothed_angle_map, cmap=cmap, norm=norm)
-        plt.title('Smoothed Arctan of Gy / Gx')
-        plt.axis('off')
-        plt.savefig(save_path, bbox_inches='tight', pad_inches=0)
-        plt.close()
+    # Normalize smoothed_angle_map to range [0, 1] for colormap mapping
+    normalized_smoothed_map = (smoothed_angle_map - (-90)) / (90 - (-90))
 
-    return smoothed_angle_map
+    # Apply colormap
+    smoothed_colored_map = cmap(normalized_smoothed_map)
+
+    # Convert to uint8 for image saving
+    smoothed_colored_map = (smoothed_colored_map[:, :, :3] * 255).astype(np.uint8)
+
+    # Create mask for NaN values
+    mask_nan = np.isnan(smoothed_angle_map)
+
+    # Set NaN values to white (255, 255, 255)
+    smoothed_colored_map[mask_nan] = [255, 255, 255]
+
+    # Save the image
+    cv2.imwrite(save_path, cv2.cvtColor(smoothed_colored_map, cv2.COLOR_RGB2BGR))
+    print(f"Smoothed angle map saved as {save_path}")
+
+    return smoothed_angle_map, copy_angled_map
