@@ -24,7 +24,7 @@ def invert_image(image_path, output_path):
             thresholded_img.save(output_path)
 
             # Show the thresholded image (optional)
-            thresholded_img.show()
+            #thresholded_img.show()
 
             print(f"Thresholded image saved as {output_path}")
 
