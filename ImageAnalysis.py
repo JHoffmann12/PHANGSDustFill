@@ -32,7 +32,7 @@ def identify_intersects(image_path, output_path,dot_size=8,box_size=10,perc = .4
             for x in range(width):
                 for y in range(height):
                     pixel_value = img.getpixel((x, y))
-                    if pixel_value == 0:  # Black pixel
+                    if pixel_value > .9:  # White pixel
                         # Check for a cross or trident pattern
                         if is_intersect(img, x, y, width, height,box_size,perc):
                             # Store coordinates of green dot
@@ -57,12 +57,64 @@ def identify_intersects(image_path, output_path,dot_size=8,box_size=10,perc = .4
             # Plot original image
             axes[0].imshow(img, cmap='gray')
             axes[0].axis('off')  # Turn off axis numbers and ticks
-            axes[0].set_title('Original Image')
+            #axes[0].set_title('Original Image')
             
             # Plot processed image with green dots
             axes[1].imshow(processed_img)
             axes[1].axis('off')  # Turn off axis numbers and ticks
-            axes[1].set_title(title)
+            #axes[1].set_title(title)
+            
+            plt.tight_layout()
+            plt.show()
+            
+            # Save the processed image with green dots
+            processed_img.save(output_path)
+            print(f"Processed {image_path} successfully. Saved as {output_path}")
+
+            return green_dots
+    
+    except IOError:
+        print(f"Unable to open or process {image_path}")
+
+def remove_junctions(junctions, image_path, output_path,dot_size=8):
+    try:
+        # Open the image file
+        with Image.open(image_path) as img:
+            # Convert the image to grayscale if not already
+            img = img.convert("L")
+            
+            # Get image size
+            width, height = img.size
+            print(img.size)
+            # Create a new image for processing
+            processed_img = img.copy()
+            draw = ImageDraw.Draw(processed_img)
+            
+            # Create a new image with transparent background
+            green_dot_img = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+            draw_green = ImageDraw.Draw(green_dot_img)
+            
+            # Draw green dots on transparent image
+            for dot in junctions:
+                x, y = dot
+                draw_green.ellipse((x - dot_size, y - dot_size, x + dot_size, y + dot_size), fill= (0, 0,0,255))
+            
+            # Merge processed_img and green_dot_img
+            processed_img = Image.alpha_composite(processed_img.convert('RGBA'), green_dot_img)
+            processed_img = processed_img.convert('RGB')
+            
+            # Display both images side by side
+            fig, axes = plt.subplots(1, 2, figsize=(6, 6))
+            
+            # Plot original image
+            axes[0].imshow(img, cmap='gray')
+            axes[0].axis('off')  # Turn off axis numbers and ticks
+            #axes[0].set_title('Original Image')
+            
+            # Plot processed image with green dots
+            axes[1].imshow(processed_img)
+            axes[1].axis('off')  # Turn off axis numbers and ticks
+            #axes[1].set_title(title)
             
             plt.tight_layout()
             plt.show()
@@ -88,7 +140,7 @@ def is_intersect(image, x, y, width, height, box_size=15, perc=.5):
             # Check if the pixel is within bounds of the image
             if (pixel_x != x and pixel_y != y) and 0 <= pixel_x < width and 0 <= pixel_y < height:
                 # Check if the pixel is black (value 0)
-                if image.getpixel((pixel_x, pixel_y)) == 0:
+                if image.getpixel((pixel_x, pixel_y)) > .9:
                     count += 1
     
     # Return True if the count of black pixels exceeds the threshold
@@ -125,12 +177,12 @@ def identify_connected_components(image_path):
     
     # Display the original image on the left subplot
     axes[0].imshow(image, cmap='gray')
-    axes[0].set_title('Original Image')
+    #axes[0].set_title('Original Image')
     axes[0].axis('off')
     
     # Display the image with outlines on the right subplot
     axes[1].imshow(image_rgb)
-    axes[1].set_title('Connected Components Outlined')
+    #axes[1].set_title('Connected Components Outlined')
     axes[1].axis('off')
     
     # Adjust layout and show the plot
@@ -204,25 +256,19 @@ def apply_sobel_filter_to_components(image_path, labels, stats, num_labels):
 
     return (Gx_total), (Gy_total)
 
-# def sort_label_id(num_labels, stats):
-#     label_areas = []
-#     for label_id in range(1, num_labels):
-#         # Extract the bounding box coordinates
-#         left = stats[label_id, cv2.CC_STAT_LEFT]
-#         top = stats[label_id, cv2.CC_STAT_TOP]
-#         width = stats[label_id, cv2.CC_STAT_WIDTH]
-#         height = stats[label_id, cv2.CC_STAT_HEIGHT]
+def sort_label_id(num_labels, stats, size):
+    small_areas = []
+    for label_id in range(1, num_labels):
+        # Extract the bounding box coordinates
+        left = stats[label_id, cv2.CC_STAT_LEFT]
+        top = stats[label_id, cv2.CC_STAT_TOP]
+        width = stats[label_id, cv2.CC_STAT_WIDTH]
+        height = stats[label_id, cv2.CC_STAT_HEIGHT]
         
-#         # Compute the area
-#         area = width * height
-        
-#         # Append the label ID and area to the list
-#         label_areas.append((label_id, area))
+        # Compute the area
+        area = width * height
+        if area < size: 
+        # Append the label ID and area to the list
+            small_areas.append(label_id)
 
-#     # Sort the list by area in descending order
-#     label_areas.sort(key=lambda x: x[1], reverse=True)
-
-#     # Extract the sorted label IDs
-#     sorted_label_ids = [label_id for label_id, area in label_areas]
-
-#     return sorted_label_ids
+    return small_areas
