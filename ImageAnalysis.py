@@ -20,7 +20,6 @@ def identify_intersects(image_path, output_path,dot_size=8,box_size=10,perc = .4
             
             # Get image size
             width, height = img.size
-            print(img.size)
             # Create a new image for processing
             processed_img = img.copy()
             draw = ImageDraw.Draw(processed_img)
@@ -85,7 +84,6 @@ def remove_junctions(junctions, image_path, output_path,dot_size=8):
             
             # Get image size
             width, height = img.size
-            print(img.size)
             # Create a new image for processing
             processed_img = img.copy()
             draw = ImageDraw.Draw(processed_img)

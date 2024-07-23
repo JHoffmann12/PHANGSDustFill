@@ -85,7 +85,6 @@ def circular_vector_average(angles):
     return np.degrees(np.arctan(sin_sum/cos_sum))
 
 
-
 def plot_arctan_with_smoothing(Gx, Gy, mask_path, filter_size=5, save_path=None):
     """
     Plot smoothed arctan(Gy / Gx) values of every pixel normalized and represented with a custom color spectrum.
@@ -103,7 +102,8 @@ def plot_arctan_with_smoothing(Gx, Gy, mask_path, filter_size=5, save_path=None)
 
     mask_image = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
     mask_binary = (mask_image > 0).astype(np.uint8)  # Convert non-zero values to 1
-    copy_angled_map[mask_binary == 1] = np.nan
+    copy_angled_map[mask_binary > 0] = np.nan
+
 
     # Apply circular vector average in a filter_size x filter_size window
     smoothed_angle_map = generic_filter(copy_angled_map, circular_vector_average, size=filter_size, mode='reflect')
@@ -178,7 +178,7 @@ def plot_arctan_with_smoothing(Gx, Gy, mask_path, filter_size=5, save_path=None)
         cv2.imwrite(save_path, cv2.cvtColor(smoother_colored_map, cv2.COLOR_RGB2BGR))
         print(f"Smoothed angle map saved as {save_path}")
 
-    return smoothed_angle_map, copy_angled_map
+    return smoother_angle_map, smoothed_angle_map
 
 def average_neighbors(data, point, half_size):
     x = point[0]
