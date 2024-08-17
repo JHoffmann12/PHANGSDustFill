@@ -6,6 +6,7 @@ from PIL import Image, ImageDraw, ImageTk
 import tkinter as tk
 from tkinter import ttk
 import csv
+import Metric
 
 def display_image_with_hexagons(image_path, hexagon_size):
     original_image = Image.open(image_path).convert("RGBA")
@@ -153,15 +154,49 @@ def analyze_hexagon(param, csv_path):
         if len(hex_data) == 0:
             print('No data in hexagon!')
         else:
-            # plt.hist(hex_data, bins=30, alpha=0.75)
-            # center = tuple(int(x) for x in param['hex_center'])
-            # plt.title(f'Histogram of Hexagon Data centered at {center}')
-            # plt.xlabel('Pixel Orientation')
-            # plt.ylabel('Frequency')
-            # plt.show()
-            find_row_by_tuple(param['hex_center'], csv_path)
+            # Calculate histogram
+            counts, bin_edges = np.histogram(hex_data, bins=180, range=(-90, 90))
 
-def run_hexagon_analysis(original_image_path, csv_path, data_array, hexagon_size=100):
+            # Calculate bin midpoints
+            bin_midpoints = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+            # Create hist_dict
+            hist_dict = dict(zip(bin_midpoints, counts))
+
+            # Step 1: Sort the dictionary items by their values in descending order
+            sorted_items = sorted(hist_dict.items(), key=lambda item: item[1], reverse=True)
+
+            # Step 2: Determine the number of key-value pairs to retain (top 20%)
+            num_to_retain = max(1, len(sorted_items) * 20 // 100)
+
+            # Step 3: Create a new dictionary with only the top 20% key-value pairs
+            hist_dict_filtered = dict(sorted_items[:num_to_retain])
+
+            # Plotting the histograms
+            fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+            # Original histogram
+            axes[0].hist(hex_data, bins=30, alpha=0.75, color='blue')
+            axes[0].set_title('Histogram of Hexagon Data')
+            axes[0].set_xlabel('Pixel Orientation')
+            axes[0].set_ylabel('Frequency')
+            axes[0].set_xlim(-90, 90)  # Set x-axis limits
+
+            # Histogram with top 20% modes
+            axes[1].bar(hist_dict_filtered.keys(), hist_dict_filtered.values(), width=1.0, alpha=0.75, color='red')
+            axes[1].set_title('Histogram with Top 20% Modes')
+            axes[1].set_xlabel('Pixel Orientation')
+            axes[1].set_ylabel('Frequency')
+            axes[1].set_xlim(-90, 90)  # Set x-axis limits
+
+            plt.tight_layout()
+            plt.show()
+            find_row_by_tuple(param['hex_center'], csv_path)
+            Metric.compute_my_metric(hex_data)
+
+            
+
+def run_hexagon_analysis(original_image_path, csv_path, data_array, hexagon_size=120):
     original_image = Image.open(original_image_path).convert("RGBA")
     hexagons, im_display_resized = update_image(hexagon_size, original_image)
 

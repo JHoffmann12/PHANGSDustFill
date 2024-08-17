@@ -12,44 +12,53 @@ def get_unique_combinations(s, num):
     # Convert each sorted tuple back to a list
     return [list(c) for c in unique_combs]
 
+def list_combinations(list_a, list_b):
+    combinations = [(b, a) for a in list_a for b in list_b]
+    return combinations
+
 def H(theta, k=0.1, theta_0=45):
     return 1 / (1 + np.exp(k * (theta - theta_0)))
 
-def sigmoid(x, k=.1, x_0=0.5):
-
-    return 1 / (1 + np.exp(-k * (x - x_0)))
-
 
 def compute_my_metric(data):
-    # Compute histogram
-    counts, bin_edges = np.histogram(data, bins=180, range=(-90, 90))
 
-    # Calculate bin midpoints
-    bin_midpoints = (bin_edges[:-1] + bin_edges[1:]) / 2
+            counts, bin_edges = np.histogram(data, bins=180, range=(-90, 90))
 
-    # Filter to get non-zero counts
-    non_zero_bins = counts > 0
+            # Calculate bin midpoints
+            bin_midpoints = (bin_edges[:-1] + bin_edges[1:]) / 2
+            hist_dict = dict(zip(bin_midpoints, counts))
+            sorted_items = sorted(hist_dict.items(), key=lambda item: item[1], reverse=True)
+            num_to_retain = max(1, len(sorted_items) * 80 // 100)
+            hist_dict = dict(sorted_items[:num_to_retain])
 
-    # Ensure non-zero bins mask matches the length of bin_midpoints
-    filtered_bin_midpoints = bin_midpoints[non_zero_bins]
-    counts = counts[non_zero_bins]
 
-    hist_dict = dict(zip(filtered_bin_midpoints, counts))
-    num = 2
-    unique_perms = get_unique_combinations(filtered_bin_midpoints, num)
-    metric_list = []
-    weight_list = []
 
-    for perm in unique_perms:
-        angle1 = perm[0]
-        angle2 = perm[1]
-        A = max(angle1, angle2)
-        B = min(angle1, angle2)
-        diff = min((180 - (A - B)), A - B)
-        weight_list.append((hist_dict[angle1] * hist_dict[angle2]))
-        metric_list.append((90-diff)/90)
-    metric_list = ((np.array(weight_list)/max(weight_list)) * np.array(metric_list))
-    return np.mean(metric_list)
+            bin_combinations = get_unique_combinations(hist_dict.keys(),2)
+            metric_list = []
+            weight_list = []
+
+            for combo in bin_combinations:
+                angle1 = combo[0]
+                angle2 = combo[1]
+                A = max(angle1, angle2)
+                B = min(angle1, angle2)
+                diff = min((180 - (A - B)), A - B)
+                
+                # Check if angle1 and angle2 are in hist_dict0 and hist_dict1 respectively
+                weight = hist_dict[angle1] * hist_dict[angle2]
+                metric = H(diff)
+                weight_list.append(weight)
+                metric_list.append(metric)
+
+
+            # Calculate the weighted sum
+            total_sum = sum(w * m for w, m in zip(weight_list, metric_list))
+
+            # Calculate the sum of weights
+            sum_weights = sum(weight_list)
+
+            return 2*(total_sum/sum_weights)-1
+
 
 def alignment_metric(data_in_hexagon):
 
@@ -67,6 +76,12 @@ def alignment_metric(data_in_hexagon):
     return order_parameter
 
 
+
+
+
+
+
+#____________________________________________________________________________________________________________________________________________________________________
 if __name__ == "__main__":
 
     # Prepare x and y data
@@ -74,8 +89,8 @@ if __name__ == "__main__":
     x = []
     for i in range(4, 180):
         # Generate data
-        data = np.random.uniform(-90, -90+i, 5000)
-        val = float(alignment_metric(data))
+        data = np.random.uniform(-90, -90+i, 100000)
+        val = float(compute_my_metric(data))
         y.append(val)
         x.append(i)
 
@@ -84,7 +99,7 @@ if __name__ == "__main__":
     for j in range(1, 90):
         # Generate data
         data1 = [-j, j] * 10000
-        val = float(alignment_metric(data1))
+        val = float(compute_my_metric(data1))
         y1.append(val)
         x1.append(j)
 
