@@ -75,21 +75,69 @@ def identify_intersects(image_path, output_path,dot_size=8,box_size=10,perc = .4
     except IOError:
         print(f"Unable to open or process {image_path}")
 
-def remove_junctions(junctions, image_path, output_path,dot_size=8):
-    try:
-        # Open the image file
-        with Image.open(image_path) as img:
-            # Convert the image to grayscale if not already
-            img = img.convert("L")
+
+
+
+
+from PIL import Image, ImageDraw
+import matplotlib.pyplot as plt
+
+# def remove_junctions1(junctions, img, output_path, dot_size=8):
+#         # Get image size
+#         width, height = img.size
+#         # Create a new image for processing
+#         processed_img = img.copy()
+#         processed_img = Image.fromarray(processed_img )
+
+#         draw = ImageDraw.Draw(processed_img)
+        
+#         # Draw circles and make pixels black within the circle
+#         for dot in junctions:
+#             x, y = dot
+#             draw.ellipse((x - dot_size, y - dot_size, x + dot_size, y + dot_size), fill=255)
             
+#             # Make any white pixels within the circle black
+#             for i in range(x - dot_size, x + dot_size + 1):
+#                 for j in range(y - dot_size, y + dot_size + 1):
+#                     if (i - x) ** 2 + (j - y) ** 2 <= dot_size ** 2:
+#                         if 0 <= i < width and 0 <= j < height:  # Check boundaries
+#                             if img.getpixel((i, j)) == 255:  # Check if pixel is white
+#                                 draw.point((i, j), fill=127)  # Make pixel black
+
+#         # Display both images side by side
+#         fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+        
+#         # Plot original image
+#         axes[0].imshow(np.flipud(img), cmap='gray')
+#         axes[0].axis('off')  # Turn off axis numbers and ticks
+#         axes[0].set_title('Original Image')
+        
+#         # Plot processed image with circles
+#         axes[1].imshow(np.flipud(processed_img), cmap='gray')
+#         axes[1].axis('off')  # Turn off axis numbers and ticks
+#         axes[1].set_title('Processed Image')
+        
+#         plt.tight_layout()
+#         plt.show()
+        
+#         # Save the processed image
+#         processed_img.save(output_path)  
+        # return processed_img  
+
+
+def remove_junctions(junctions, img, output_path,dot_size=8):
             # Get image size
-            width, height = img.size
+            height, width = np.shape(img)
             # Create a new image for processing
-            processed_img = img.copy()
-            draw = ImageDraw.Draw(processed_img)
-            
+            processed_img = copy.deepcopy(img)
+            processed_img = Image.fromarray(processed_img)
+
+            processed_img = processed_img.convert("L")   
+
             # Create a new image with transparent background
             green_dot_img = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+
+            # assert(np.shape(green_dot_img)==np.shape(img))
             draw_green = ImageDraw.Draw(green_dot_img)
             
             # Draw green dots on transparent image
@@ -99,18 +147,18 @@ def remove_junctions(junctions, image_path, output_path,dot_size=8):
             
             # Merge processed_img and green_dot_img
             processed_img = Image.alpha_composite(processed_img.convert('RGBA'), green_dot_img)
-            processed_img = processed_img.convert('RGB')
-            
+            processed_img = processed_img.convert('L')
+
             # Display both images side by side
             fig, axes = plt.subplots(1, 2, figsize=(6, 6))
             
             # Plot original image
-            axes[0].imshow(img, cmap='gray')
+            axes[0].imshow(np.flipud(img), cmap='gray')
             axes[0].axis('off')  # Turn off axis numbers and ticks
             #axes[0].set_title('Original Image')
             
             # Plot processed image with green dots
-            axes[1].imshow(processed_img)
+            axes[1].imshow(np.flipud(processed_img), cmap = 'gray')
             axes[1].axis('off')  # Turn off axis numbers and ticks
             #axes[1].set_title(title)
             
@@ -119,10 +167,7 @@ def remove_junctions(junctions, image_path, output_path,dot_size=8):
             
             # Save the processed image with green dots
             processed_img.save(output_path)
-            print(f"Processed {image_path} successfully. Saved as {output_path}")
-    
-    except IOError:
-        print(f"Unable to open or process {image_path}")
+            return processed_img    
 
 def is_intersect(image, x, y, width, height, box_size=15, perc=.5):
     box_size = int(math.sqrt(box_size)-1)
@@ -145,11 +190,8 @@ def is_intersect(image, x, y, width, height, box_size=15, perc=.5):
     return count >= box_size*box_size*perc
 
 
-def identify_connected_components(image_path):
+def identify_connected_components(image):
 
-    # Read the image
-    image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-    
     # Perform connected components labeling
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(image, connectivity=8)
     
@@ -174,12 +216,12 @@ def identify_connected_components(image_path):
     fig, axes = plt.subplots(1, 2, figsize=(6, 6))
     
     # Display the original image on the left subplot
-    axes[0].imshow(image, cmap='gray')
+    axes[0].imshow(np.flipud(image), cmap='gray')
     #axes[0].set_title('Original Image')
     axes[0].axis('off')
     
     # Display the image with outlines on the right subplot
-    axes[1].imshow(image_rgb)
+    axes[1].imshow(np.flipud(image_rgb))
     #axes[1].set_title('Connected Components Outlined')
     axes[1].axis('off')
     
@@ -192,7 +234,7 @@ def identify_connected_components(image_path):
 
 
 
-def apply_sobel_filter_to_components(image_path, labels, stats, num_labels):
+def apply_sobel_filter_to_components(img, labels, stats, num_labels):
     """
     Apply Sobel filter to each connected component identified by labels and stats.
     Calculate Gx and Gy for every pixel in each component.
@@ -208,13 +250,9 @@ def apply_sobel_filter_to_components(image_path, labels, stats, num_labels):
     """
     # Read the image
     # read the image
-    img = cv2.imread(image_path)
-
-    # convert to gray
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
     # blur
-    blur = cv2.GaussianBlur(gray, (0,0), 1.3, 1.3)
+    blur = cv2.GaussianBlur(img, (0,0), 1.3, 1.3)
 
     # Initialize Gx and Gy matrices to store results for the entire image
     Gx_total = np.zeros_like(blur, dtype=np.float32)
@@ -270,3 +308,6 @@ def sort_label_id(num_labels, stats, size):
             small_areas.append(label_id)
 
     return small_areas
+
+
+ 

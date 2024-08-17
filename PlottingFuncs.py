@@ -11,7 +11,7 @@ from scipy import ndimage
 import copy 
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-def plot_sobel_derivatives(mask_path, Gx_map, Gy_map, save_path=r'C:\Users\HP\Documents\JHU_Academics\Research\PHANGS\sobel_derivatives.png'):
+def plot_sobel_derivatives(mask_image, Gx_map, Gy_map, save_path=r'C:\Users\HP\Documents\JHU_Academics\Research\PHANGS\sobel_derivatives.png'):
     try:
         Gx_copy = copy.deepcopy(Gx_map)
         Gy_copy = copy.deepcopy(Gy_map)
@@ -19,7 +19,6 @@ def plot_sobel_derivatives(mask_path, Gx_map, Gy_map, save_path=r'C:\Users\HP\Do
         # Normalize Gx_copy and Gy_copy
         Gx_copy = Gx_copy / np.abs(np.nanmax(Gx_copy))
         Gy_copy = Gy_copy / np.abs(np.nanmax(Gy_copy))
-        mask_image = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
 
         mask_binary = (mask_image > 0).astype(np.uint8)  # Convert non-zero values to 1
         Gx_copy[mask_binary==0] = np.nan
@@ -45,12 +44,12 @@ def plot_sobel_derivatives(mask_path, Gx_map, Gy_map, save_path=r'C:\Users\HP\Do
         fig, (ax1, ax2, cax) = plt.subplots(1, 3, figsize=(8, 6), gridspec_kw={'width_ratios': [1, 1, 0.05]})
         
         # Plot Gx map with custom color spectrum
-        im1 = ax1.imshow(Gx_copy, interpolation='nearest', cmap=cmap)
+        im1 = ax1.imshow(np.flipud(Gx_copy), interpolation='nearest', cmap=cmap)
         ax1.set_title('X Derivatives (Gx)')
         ax1.axis('off')
         
         # Plot Gy map with custom color spectrum
-        im2 = ax2.imshow(Gy_copy, interpolation='nearest', cmap=cmap)
+        im2 = ax2.imshow(np.flipud(Gy_copy), interpolation='nearest', cmap=cmap)
         ax2.set_title('Y Derivatives (Gy)')
         ax2.axis('off')
         
@@ -85,7 +84,7 @@ def circular_vector_average(angles):
     return np.degrees(np.arctan(sin_sum/cos_sum))
 
 
-def plot_arctan_with_smoothing(Gx, Gy, mask_path, filter_size=5, save_path=None):
+def plot_arctan_with_smoothing(Gx, Gy, mask_image, filter_size=5, save_path=None):
     """
     Plot smoothed arctan(Gy / Gx) values of every pixel normalized and represented with a custom color spectrum.
     Include a scale bar to show the color mapping.
@@ -100,7 +99,6 @@ def plot_arctan_with_smoothing(Gx, Gy, mask_path, filter_size=5, save_path=None)
     angle_map = -1 * np.degrees(np.arctan(Gy / Gx))
     copy_angled_map = copy.deepcopy(angle_map)
 
-    mask_image = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
     mask_binary = (mask_image > 0).astype(np.uint8)  # Convert non-zero values to 1
     copy_angled_map[mask_binary > 0] = np.nan
 
@@ -142,17 +140,17 @@ def plot_arctan_with_smoothing(Gx, Gy, mask_path, filter_size=5, save_path=None)
     fig, axs = plt.subplots(1, 3, figsize=(18, 6))
 
     # Plot angle_map
-    im0 = axs[0].imshow(angle_map, interpolation='nearest', cmap=cyclic_cmap)
+    im0 = axs[0].imshow(np.flipud(angle_map), interpolation='nearest', cmap=cyclic_cmap)
     axs[0].set_title('Original Angle Map')
     axs[0].axis('off')
 
     # Plot smoothed_angle_map
-    im1 = axs[1].imshow(smoothed_angle_map, interpolation='nearest', cmap=cyclic_cmap)
+    im1 = axs[1].imshow(np.flipud(smoothed_angle_map), interpolation='nearest', cmap=cyclic_cmap)
     axs[1].set_title('Smoothed Angle Map')
     axs[1].axis('off')
 
     # Plot smoother_angle_map
-    im2 = axs[2].imshow(smoother_angle_map, interpolation='nearest', cmap=cyclic_cmap)
+    im2 = axs[2].imshow(np.flipud(smoother_angle_map), interpolation='nearest', cmap=cyclic_cmap)
     axs[2].set_title('Infilled and Smoothed Angle Map')
     axs[2].axis('off')
 
@@ -175,7 +173,7 @@ def plot_arctan_with_smoothing(Gx, Gy, mask_path, filter_size=5, save_path=None)
 
     # Save the image if save_path is provided
     if save_path:
-        cv2.imwrite(save_path, cv2.cvtColor(smoother_colored_map, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(save_path, cv2.cvtColor(np.flipud(smoother_colored_map), cv2.COLOR_RGB2BGR))
         print(f"Smoothed angle map saved as {save_path}")
 
     return smoother_angle_map, smoothed_angle_map
