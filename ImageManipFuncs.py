@@ -179,3 +179,43 @@ def skeleton_analysis(skeleton, image, prune=False, prune_criteria='length', rel
     return longest_path_skeleton
 
 
+
+
+def skeleton_Prune(skeleton, image, prune_criteria='combined', relintens_thresh=0.1,
+                      branch_thresh=5, verbose=False):
+
+    # Ensure skeleton is binary
+    skeleton = (skeleton > 0).astype(int)
+
+    if verbose:
+        plt.imshow(skeleton, cmap='gray')
+        plt.title("Original Skeleton")
+        plt.show()
+
+    # Pruning based on the criteria
+    if prune_criteria == 'length':
+        if branch_thresh is not None:
+            skeleton = remove_small_objects(skeleton.astype(bool), min_size=branch_thresh).astype(int)
+    elif prune_criteria == 'intensity':
+        labeled_skeleton, num_features = measure.label(skeleton, return_num=True)
+        for region in measure.regionprops(labeled_skeleton, intensity_image=image):
+            if region.mean_intensity < relintens_thresh:
+                skeleton[labeled_skeleton == region.label] = 0
+    elif prune_criteria == 'combined':
+        if branch_thresh is not None and relintens_thresh is not None:
+            # Label the skeleton
+            labeled_skeleton, num_features = measure.label(skeleton, return_num=True)
+            for region in measure.regionprops(labeled_skeleton, intensity_image=image):
+                # Check length (area of the region)
+                if region.area < branch_thresh or region.mean_intensity < relintens_thresh:
+                    skeleton[labeled_skeleton == region.label] = 0
+
+
+        if verbose:
+            plt.imshow(skeleton, cmap='gray')
+            plt.title("Pruned Skeleton")
+            plt.show()
+
+    return skeleton
+
+

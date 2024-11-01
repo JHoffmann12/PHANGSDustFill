@@ -185,6 +185,7 @@ def average_neighbors(data, point, half_size):
     sum = 0
     count = 0
     width,height = np.shape(data)
+    myPixels = []
     # Iterate over a box_size x box_size box centered at (x, y)
     for i in range(-half_size, half_size + 1):  # Range from -half_size to half_size (inclusive)
         for j in range(-half_size, half_size + 1):  # Range from -half_size to half_size (inclusive)
@@ -197,7 +198,8 @@ def average_neighbors(data, point, half_size):
                     data[pixel_x,pixel_y] = -1*data[pixel_x,pixel_y]
                 sum+=data[pixel_x,pixel_y]
                 count+=1
-    if count > 0:
-        return sum/count
+                myPixels.append(data[pixel_x,pixel_y])
+    if len(myPixels) > 0:
+        return circular_vector_average(myPixels)
     else: 
         return np.nan

@@ -135,7 +135,7 @@ def remove_junctions(junctions, img, output_path,dot_size=8):
             processed_img = processed_img.convert("L")   
 
             # Create a new image with transparent background
-            green_dot_img = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+            green_dot_img = Image.new('RGBA', (width, height), (255,255,255,255))
 
             # assert(np.shape(green_dot_img)==np.shape(img))
             draw_green = ImageDraw.Draw(green_dot_img)
@@ -143,7 +143,7 @@ def remove_junctions(junctions, img, output_path,dot_size=8):
             # Draw green dots on transparent image
             for dot in junctions:
                 x, y = dot
-                draw_green.ellipse((x - dot_size, y - dot_size, x + dot_size, y + dot_size), fill= (0, 0,0,255))
+                draw_green.ellipse((x - dot_size, y - dot_size, x + dot_size, y + dot_size), fill= (255, 255,255,255))
             
             # Merge processed_img and green_dot_img
             processed_img = Image.alpha_composite(processed_img.convert('RGBA'), green_dot_img)
@@ -213,21 +213,21 @@ def identify_connected_components(image):
         cv2.rectangle(image_rgb, (left, top), (left + width, top + height), color_orange, 2)
     
     # Create a figure with two subplots (original and with outlines)
-    fig, axes = plt.subplots(1, 2, figsize=(6, 6))
+    # fig, axes = plt.subplots(1, 2, figsize=(6, 6))
     
     # Display the original image on the left subplot
-    axes[0].imshow(np.flipud(image), cmap='gray')
-    #axes[0].set_title('Original Image')
-    axes[0].axis('off')
+    # axes[0].imshow(np.flipud(image), cmap='gray')
+    # #axes[0].set_title('Original Image')
+    # axes[0].axis('off')
     
-    # Display the image with outlines on the right subplot
-    axes[1].imshow(np.flipud(image_rgb))
-    #axes[1].set_title('Connected Components Outlined')
-    axes[1].axis('off')
+    # # Display the image with outlines on the right subplot
+    # axes[1].imshow(np.flipud(image_rgb))
+    # #axes[1].set_title('Connected Components Outlined')
+    # axes[1].axis('off')
     
-    # Adjust layout and show the plot
-    plt.tight_layout()
-    plt.show()
+    # # Adjust layout and show the plot
+    # plt.tight_layout()
+    # plt.show()
     
     # Return labels and stats
     return labels, stats, num_labels
