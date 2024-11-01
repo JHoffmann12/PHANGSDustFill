@@ -81,5 +81,4 @@ def compute_my_metric(data_dict):
 # hist1 = [50,50,50,50]
 
 # hist2 = [-50,-50,-50,-50]
-
-# print(compute_emd(hist1,hist2))
+print(compute_emd([1],[np.nan]))

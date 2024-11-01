@@ -28,7 +28,7 @@ def compute_my_metric(data):
             bin_midpoints = (bin_edges[:-1] + bin_edges[1:]) / 2
             hist_dict = dict(zip(bin_midpoints, counts))
             sorted_items = sorted(hist_dict.items(), key=lambda item: item[1], reverse=True)
-            num_to_retain = max(1, len(sorted_items) * 80 // 100)
+            num_to_retain = max(1, len(sorted_items) * 40 // 100)
             hist_dict = dict(sorted_items[:num_to_retain])
 
 

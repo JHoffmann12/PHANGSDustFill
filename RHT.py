@@ -3,8 +3,17 @@
 import numpy as np
 from scipy.stats import scoreatpercentile
 import matplotlib.pyplot as p
+import Metric
+import numpy as np
+import cv2
+from scipy.stats import wasserstein_distance 
+# Helper functions
+import itertools
+import numpy as np
+import matplotlib.pyplot as plt
+import math 
 
-
+import numpy as np
 def rht(mask, radius, ntheta=180, background_percentile=25, verbose=False):
     '''
 
@@ -232,3 +241,72 @@ def circ_CI(theta, weights=None, u_ci=0.67, axis=0):
     samp_cis = np.vstack([mean_ang - ci, mean_ang + ci])
 
     return samp_cis
+
+def get_combinations(s, num):
+    # Generate all combinations of length 'num'
+    all_combs = itertools.combinations(s, num)
+    # Convert each combination to a sorted tuple to remove duplicates
+    unique_combs = set(tuple(sorted(c)) for c in all_combs)
+    # Convert each sorted tuple back to a list
+    return [list(c) for c in unique_combs]
+
+def list_combinations(list_a, list_b):
+    combinations = [(b, a) for a in list_a for b in list_b]
+    return combinations
+
+def RHTMetric(data_dict):
+    # Compute histogram
+    segments = data_dict.keys()
+    combinations = get_combinations(segments, 2)
+
+    metric_list = []
+    weight_list = []
+
+    for pair in combinations:
+        seg1 = pair[0]
+        seg2 = pair[1]
+        angle1 = data_dict[seg1][0]
+        angle2 = data_dict[seg2][0]
+        # print(angle1)
+        A = max(angle1, angle2)
+        B = min(angle1, angle2)
+        diff = min((180 - (A - B)), A - B)
+        
+        # Check if angle1 and angle2 are in hist_dict0 and hist_dict1 respectively
+        weight = data_dict[seg1][1] + data_dict[seg2][1]
+        metric = H(diff, 1)
+        self1 = Metric.compute_my_metric(data_dict[seg1][2])
+        self2 = Metric.compute_my_metric(data_dict[seg2][2])
+
+        weight_list.append(data_dict[seg1][1]*data_dict[seg2][1])
+        weight_list.append(weight)
+        metric_list.append(((metric**2*(self1*self2))))
+
+    # Calculate the weighted sum
+    total_sum = sum(w * m for w, m in zip(metric_list, weight_list))
+
+    # Calculate the sum of weights
+    sum_weights = sum(weight_list)
+    
+    return (total_sum / sum_weights) # harmonic_mean(metric_list) 
+
+def H(theta, k=0.1, theta_0=45):
+    return 1 / (1 + np.exp(k * (theta - theta_0)))
+
+def harmonic_mean(values):
+    """
+    Calculate the harmonic mean of a list of numbers.
+    
+    :param values: A list of numeric values
+    :return: The harmonic mean of the values
+    """
+    if not values:
+        raise ValueError("The list of values is empty.")
+    
+    if any(v <= 0 for v in values):
+        raise ValueError("All values must be positive for harmonic mean calculation.")
+    
+    n = len(values)
+    reciprocal_sum = sum(1 / v for v in values)
+    return n / reciprocal_sum
+
