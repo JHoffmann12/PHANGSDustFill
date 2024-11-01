@@ -43,13 +43,29 @@ def create_composite_image(directory, output_name, output_directory, common_stri
             else:
                 print(f"Skipping empty data in file: {file}")
 
+    if not images:
+        print("No images were loaded. Exiting function.")
+        return
+
     # Stack images and count the presence of each pixel across files
     stacked_images = np.array(images)
     composite_data = np.nansum(stacked_images, axis=0)
 
+    # Check if composite_data is an array or a scalar
+    if np.isscalar(composite_data):
+        print("Error: composite_data is a scalar, not an array. Exiting function.")
+        print(f"Composite data value: {composite_data}")
+        print("This issue may be due to loading issues with FITS files or a lack of input images.")
+        return
+    else:
+        print("Composite data array created successfully.")
+
     # Apply the cutoff percentage
     max_presence = len(images)
     cutoff_value = (cutoff_perc / 100) * max_presence
+    print(f"Cutoff value (presence threshold): {cutoff_value}")
+    print(f"Total number of images: {max_presence}")
+
     composite_data[composite_data < cutoff_value] = 0  # Set pixels below the cutoff to 0
 
     # Normalize composite data to the range [0, 255] for grayscale representation
@@ -66,6 +82,7 @@ def create_composite_image(directory, output_name, output_directory, common_stri
     hdu.writeto(output_fits_path, overwrite=True)
     print(f"Composite image saved as FITS: {output_fits_path}")
 
+
 def BlurSkel(input_file, output_name, output_directory):
     # Open the binary FITS file and read the data and header
     with fits.open(input_file) as hdul:
@@ -73,10 +90,7 @@ def BlurSkel(input_file, output_name, output_directory):
         header = hdul[0].header
 
     # Process the image
-    binary_image = (image_data > 0).astype(np.uint8)
-    blurred_image = gaussian_filter(binary_image, sigma=.2)
-    binary_blurred_image = (blurred_image > 0.3).astype(np.uint8)
-    skeletonized_image = skeletonize(binary_blurred_image).astype(np.uint8)
+    skeletonized_image = skeletonize(image_data).astype(np.uint8)
 
     # Save the skeletonized image
     output_fits_path = os.path.join(output_directory, output_name + ".fits")
@@ -183,7 +197,7 @@ def resample_fits(fits_BkgSub_out_path, fits_block_out_path, scale_factor, save_
     new_shape = (int(original_data.shape[0] / scale_factor), int(original_data.shape[1] / scale_factor))
     reprojected_data, _ = reproject_exact((original_data, original_header), new_header, shape_out=new_shape)
 
-    reprojected_data = upscale_image(crop_nan_border(reprojected_data), scale_factor)
+    reprojected_data = crop_nan_border(reprojected_data)
 
     hdu = fits.PrimaryHDU(reprojected_data, header=new_header)
     hdu.writeto(fits_block_out_path, overwrite=True)
@@ -197,35 +211,35 @@ def determineParams(fits_file):
 
     if '128pc' in fits_file:
         print('image is 128 parcec scale')
-        return 8
+        return 8, "128pc"
     
     elif '8pc' in fits_file: 
         print('image is 8 parcec scale')
-        return 0 
+        return 0 , "8pc"
     
     elif '16pc' in fits_file: 
         print('image is 16 parcec scale')
-        return 0 
+        return 0, "16pc"
     
     elif '32pc' in fits_file: 
         print('image is 32 parcec scale')
-        return 2
+        return 2, "32pc"
     
     elif '64pc' in fits_file:
         print('image is 64 parcec scale')
-        return 4
+        return 4, "64pc"
 
     elif '256pc' in fits_file:
         print('image is 256 parcec scale')
-        return 16
+        return 16, "256pc"
     
     elif '512pc' in fits_file:
         print('image is 512 parcec scale')
-        return 32
+        return 32, "512pc"
     
     elif '1024pc' in fits_file:
         print('image is 1024 parcec scale')
-        return 64
+        return 64, "1024pc"
 
     else:
         print('invalid fits file')
