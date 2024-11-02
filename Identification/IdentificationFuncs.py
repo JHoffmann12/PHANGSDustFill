@@ -17,14 +17,19 @@ from scipy.ndimage import zoom
 from matplotlib.colors import Normalize
 from glob import glob
 from scipy.ndimage import gaussian_filter
+import time 
 
 def ThresholdSkel(image_data, original_header, fits_out_path):
-    ret,thresh1 = cv2.threshold(image_data,2500,255,cv2.THRESH_BINARY)
-    skeleton_image = skeletonize(thresh1).astype(np.float32)
+    total_thresh = cv2.adaptiveThreshold(image_data, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 21, -20)
+    skeleton_image = skeletonize(total_thresh).astype(np.float32)
     hdu = fits.PrimaryHDU(skeleton_image, header=original_header)
+    time.sleep(1)  # Pause for 1 second before writing
     hdu.writeto(fits_out_path, overwrite=True)
 
 def create_composite_image(directory, output_name, output_directory, common_string, cutoff_perc=0):
+    # Ensure the output directory exists
+    os.makedirs(output_directory, exist_ok=True)
+    
     # Find FITS files based on the common_string
     file_pattern = os.path.join(directory, f"*{common_string}*.fits")
     fits_files = glob(file_pattern)
@@ -37,7 +42,8 @@ def create_composite_image(directory, output_name, output_directory, common_stri
         with fits.open(file) as hdul:
             image_data = hdul[0].data
             if image_data is not None:
-                images.append((image_data > 0).astype(np.uint8))  # Binary presence indicator
+                # Binary presence indicator (values > 0 set to 1, others set to 0)
+                images.append((image_data > 0).astype(np.uint8))
                 if header is None:
                     header = hdul[0].header
             else:
@@ -52,17 +58,15 @@ def create_composite_image(directory, output_name, output_directory, common_stri
     composite_data = np.nansum(stacked_images, axis=0)
 
     # Check if composite_data is an array or a scalar
-    if np.isscalar(composite_data):
-        print("Error: composite_data is a scalar, not an array. Exiting function.")
-        print(f"Composite data value: {composite_data}")
-        print("This issue may be due to loading issues with FITS files or a lack of input images.")
+    if np.isscalar(composite_data) or composite_data.size == 0:
+        print("Error: composite_data is invalid or empty. Exiting function.")
         return
     else:
         print("Composite data array created successfully.")
 
     # Apply the cutoff percentage
     max_presence = len(images)
-    cutoff_value = (cutoff_perc / 100) * max_presence
+    cutoff_value = (cutoff_perc * max_presence) / 100  # Adjusting cutoff based on total images
     print(f"Cutoff value (presence threshold): {cutoff_value}")
     print(f"Total number of images: {max_presence}")
 
@@ -73,30 +77,19 @@ def create_composite_image(directory, output_name, output_directory, common_stri
 
     # Save the grayscale composite as PNG
     output_png_path = os.path.join(output_directory, output_name + ".png")
-    cv2.imwrite(output_png_path, composite_data)
-    print(f"Composite image saved as PNG: {output_png_path}")
+    success = cv2.imwrite(output_png_path, composite_data)
+    if success:
+        print(f"Composite image saved as PNG: {output_png_path}")
+    else:
+        print("Failed to save composite image as PNG. Check image data and path.")
 
     # Save the grayscale composite as FITS
     output_fits_path = os.path.join(output_directory, output_name + ".fits")
     hdu = fits.PrimaryHDU(data=composite_data, header=header)
+    time.sleep(1)  # Pause for 1 second before writing
     hdu.writeto(output_fits_path, overwrite=True)
     print(f"Composite image saved as FITS: {output_fits_path}")
 
-
-def BlurSkel(input_file, output_name, output_directory):
-    # Open the binary FITS file and read the data and header
-    with fits.open(input_file) as hdul:
-        image_data = hdul[0].data
-        header = hdul[0].header
-
-    # Process the image
-    skeletonized_image = skeletonize(image_data).astype(np.uint8)
-
-    # Save the skeletonized image
-    output_fits_path = os.path.join(output_directory, output_name + ".fits")
-    hdu = fits.PrimaryHDU(skeletonized_image, header=header)
-    hdu.writeto(output_fits_path, overwrite=True)
-    print(f"Skeletonized image saved as FITS: {output_fits_path}")
 
 
 #Erode the Boundary and return a mask for blank regions
@@ -154,7 +147,7 @@ def bkgSub(image_data, mask, scalepix, original_header, fits_BkgSub_out_path):
     #scale divRMS
     topval=np.max(divRMS)
     divRMSscl=divRMS*65535/topval
-
+    time.sleep(1)  # Pause for 1 second before writing
     hdu = fits.PrimaryHDU(divRMSscl, header=original_header)
     hdu.writeto(fits_BkgSub_out_path, overwrite=True)
 
@@ -199,8 +192,8 @@ def resample_fits(fits_BkgSub_out_path, fits_block_out_path, scale_factor, save_
 
     reprojected_data = crop_nan_border(reprojected_data)
 
-    hdu = fits.PrimaryHDU(reprojected_data, header=new_header)
-    hdu.writeto(fits_block_out_path, overwrite=True)
+    # hdu = fits.PrimaryHDU(reprojected_data, header=new_header)
+    # hdu.writeto(fits_block_out_path, overwrite=True)
 
     pngData = reprojected_data.astype(np.uint16)
     cv2.imwrite(save_png_path, pngData)
@@ -245,7 +238,7 @@ def determineParams(fits_file):
         print('invalid fits file')
 
 
-def txtToFilaments(result_file, csv_file_path, blocked_data, fits_out_path):
+def txtToFilaments(result_file, csv_file_path, blocked_data, fits_out_path, scale_factor, original_header):
     expected_header = "s p x y z fg_int bg_int"
 
     print(f' working on {result_file}')
@@ -270,7 +263,7 @@ def txtToFilaments(result_file, csv_file_path, blocked_data, fits_out_path):
 
     if header_start_index is None:
         print('HEADER NOT FOUND!')
-        return 
+        return np.nan, np.nan
     
     # Extract header and data
     header_and_data = lines[header_start_index:stopper_index]
@@ -325,12 +318,22 @@ def txtToFilaments(result_file, csv_file_path, blocked_data, fits_out_path):
             filament_dict[s_value].append((row['x'], row['y']))
 
 
-    fits.writeto(fits_out_path, (gray_image), overwrite=True)
-
+    gray_image = upscale_image(gray_image, 2* scale_factor)
+    hdu = fits.PrimaryHDU(gray_image, header=original_header)
+    time.sleep(1)  # Pause for 1 second before writing
+    hdu.writeto(fits_out_path, overwrite=True)
     print('Success, fits file created from SOAX')
 
-    return filament_dict
+    return filament_dict, gray_image
 
+def restore_size(fits_path, data, header, scale_factor):
+    scale_factor = 2*scale_factor
+    data = upscale_image(data, scale_factor)
+    hdu = fits.PrimaryHDU(data, header=header)
+    time.sleep(1)  # Pause for 1 second before writing
+    hdu.writeto(fits_path, overwrite=True)
+
+    
 
 # functions below are For F function only:
 
