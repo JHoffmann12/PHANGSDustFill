@@ -92,20 +92,34 @@ for galaxy_folder in os.listdir(galaxy_dir):
             subprocess.run(cmdString, shell=True)
             print(f"Complete Soax on {fits_file}")
 
+
+            #blow up blocked_png size and save
+            if(scale_factor != 0):
+                print("saving Blocked data")
+                identify.restore_size(fits_block_out_path, blocked_data, original_header, scale_factor)
+
             #input file path is txt file, output file path is fits from SOAX
             print("txt to FITS")
             for result_file in os.listdir(f'{galaxy_folder}\SOAXOutput\{img_scale}'):
                 if(result_file.endswith('.txt')):
                     csv_file_path = fr"{galaxy_folder}\SOAXOutput\{img_scale}\{result_file}_to_CSV.csv"
                     fits_out_path = fr"{galaxy_folder}\SOAXOutput\{img_scale}\{result_file}_to_FITS.fits"
+                    base_result_file = os.path.splitext(result_file)[0]  # removes the .txt extension
+                    skel_path = fr"{galaxy_folder}\SoaxSkel\{base_result_file}_to_Skel.fits"
                     result_file = fr"{galaxy_folder}\SOAXOutput\{img_scale}\{result_file}"
-                    filament_dict = identify.txtToFilaments(result_file, csv_file_path, blocked_data, fits_out_path)
+                    filament_dict, soax_data = identify.txtToFilaments(result_file, csv_file_path, blocked_data, fits_out_path, scale_factor, original_header)
+                    #skeletonize Soax? 
+                    if(isinstance(soax_data, np.ndarray) and soax_data.size > 0) and (scale_factor != 0): 
+                        print("making skeleton")
+                        skel_data = skeletonize(soax_data)
+                        skel_data = skel_data.astype(np.uint16)
+                        hdu = fits.PrimaryHDU(skel_data, header=original_header)
+                        hdu.writeto(skel_path, overwrite=True)
 
-            #generate inferno color map composite/probability image
+            #generate composite/probability image
             directory = fr"{galaxy_folder}\SOAXOutput\{img_scale}"
             output_name = fr"{fits_file}_Composite"
             output_directory = fr"{galaxy_folder}\Composite"
             common_string = fits_file
             identify.create_composite_image(directory, output_name, output_directory, common_string)
 
-    
