@@ -18,9 +18,12 @@ from matplotlib.colors import Normalize
 from glob import glob
 from scipy.ndimage import gaussian_filter
 import time 
+import math
 
 def ThresholdSkel(image_data, original_header, fits_out_path):
-    total_thresh = cv2.adaptiveThreshold(image_data, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 21, -20)
+    image_data = 255 * (image_data - np.min(image_data)) / (np.max(image_data) - np.min(image_data))
+    image_data = image_data.astype(np.uint8)    
+    total_thresh = cv2.adaptiveThreshold(image_data, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 21, 3)
     skeleton_image = skeletonize(total_thresh).astype(np.float32)
     hdu = fits.PrimaryHDU(skeleton_image, header=original_header)
     time.sleep(1)  # Pause for 1 second before writing
@@ -154,7 +157,7 @@ def bkgSub(image_data, mask, scalepix, original_header, fits_BkgSub_out_path):
     return divRMSscl
 
 
-def crop_nan_border(image):
+def crop_nan_border(image, expected_shape):
     # Create a mask of non-NaN values
     mask = ~np.isnan(image)
     
@@ -165,6 +168,28 @@ def crop_nan_border(image):
     # Use the min and max of these indices to slice the image
     cropped_image = image[non_nan_rows.min():non_nan_rows.max() + 1, 
                           non_nan_cols.min():non_nan_cols.max() + 1]
+    
+    # Get the current shape of the cropped image
+    current_shape = cropped_image.shape
+    
+    # Check if the cropped image needs to be resized
+    if current_shape != expected_shape:
+        # Pad or crop to reach the expected shape
+        padded_image = np.full(expected_shape, np.nan)  # Initialize with NaNs
+        
+        # If cropped_image is larger than expected_shape, trim it
+        trim_rows = min(current_shape[0], expected_shape[0])
+        trim_cols = min(current_shape[1], expected_shape[1])
+        
+        # Center the cropped image within the expected shape
+        start_row = (expected_shape[0] - trim_rows) // 2
+        start_col = (expected_shape[1] - trim_cols) // 2
+        
+        # Place the trimmed or centered cropped_image in the padded_image
+        padded_image[start_row:start_row + trim_rows, start_col:start_col + trim_cols] = \
+            cropped_image[:trim_rows, :trim_cols]
+        
+        return padded_image
     
     return cropped_image
 
@@ -187,18 +212,29 @@ def resample_fits(fits_BkgSub_out_path, fits_block_out_path, scale_factor, save_
     new_header['CDELT1'] = new_pixel_scale
     new_header['CDELT2'] = new_pixel_scale
 
+    # Apply scale factor and adjust for 0.5-pixel offset
+    new_header['CRPIX1'] = (original_header['CRPIX1'] / scale_factor) + .4687 #shift for some reason
+    new_header['CRPIX2'] = (original_header['CRPIX2'] / scale_factor) + .4867 #shift for some reason
+
+    # Define the new shape for the reprojected data
     new_shape = (int(original_data.shape[0] / scale_factor), int(original_data.shape[1] / scale_factor))
+
+    # Reproject data
     reprojected_data, _ = reproject_exact((original_data, original_header), new_header, shape_out=new_shape)
 
-    reprojected_data = crop_nan_border(reprojected_data)
+    expected_shape = int(original_data.shape[0] / scale_factor), int(original_data.shape[1] / scale_factor)
+    # Crop NaN border (if necessary)
+    reprojected_data = crop_nan_border(reprojected_data, expected_shape)
 
-    # hdu = fits.PrimaryHDU(reprojected_data, header=new_header)
-    # hdu.writeto(fits_block_out_path, overwrite=True)
+    # Write the modified data and header to a new FITS file
+    hdu = fits.PrimaryHDU(reprojected_data, header=new_header)  
+    hdu.writeto(fits_block_out_path, overwrite=True)
 
+    # Save a PNG for visualization
     pngData = reprojected_data.astype(np.uint16)
     cv2.imwrite(save_png_path, pngData)
 
-    return reprojected_data
+    return reprojected_data, new_header
 
 def determineParams(fits_file):
 
@@ -237,6 +273,15 @@ def determineParams(fits_file):
     else:
         print('invalid fits file')
 
+def getDistance(fits_file):
+    if('0628' in fits_file):
+        return 9.84
+    elif('4254' in fits_file):
+        return 13.1
+    elif('4303' in fits_file):
+        return 16.99
+    else:
+        print("improper file")
 
 def txtToFilaments(result_file, csv_file_path, blocked_data, fits_out_path, scale_factor, original_header):
     expected_header = "s p x y z fg_int bg_int"
@@ -245,6 +290,7 @@ def txtToFilaments(result_file, csv_file_path, blocked_data, fits_out_path, scal
     assert( os.path.isfile(result_file))
     
     # Read the content of the input file
+    
     with open(result_file, 'r') as file:
         lines = file.readlines()
 
@@ -317,8 +363,6 @@ def txtToFilaments(result_file, csv_file_path, blocked_data, fits_out_path, scal
             # Append the (x, y) coordinates as a tuple
             filament_dict[s_value].append((row['x'], row['y']))
 
-
-    gray_image = upscale_image(gray_image, 2* scale_factor)
     hdu = fits.PrimaryHDU(gray_image, header=original_header)
     time.sleep(1)  # Pause for 1 second before writing
     hdu.writeto(fits_out_path, overwrite=True)
