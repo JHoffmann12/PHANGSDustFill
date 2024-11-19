@@ -19,6 +19,7 @@ from glob import glob
 from scipy.ndimage import gaussian_filter
 import time 
 import math
+from astropy.wcs import WCS
 
 def ThresholdSkel(image_data, original_header, fits_out_path):
     image_data = 255 * (image_data - np.min(image_data)) / (np.max(image_data) - np.min(image_data))
@@ -202,7 +203,6 @@ def upscale_image(image, scale_factor):
 
 
 def resample_fits(fits_BkgSub_out_path, fits_block_out_path, scale_factor, save_png_path):
-    scale_factor *= 2
     with fits.open(fits_BkgSub_out_path) as hdul:
         original_data = hdul[0].data
         original_header = hdul[0].header
@@ -240,35 +240,35 @@ def determineParams(fits_file):
 
     if '128pc' in fits_file:
         print('image is 128 parcec scale')
-        return 8, "128pc"
+        return 16, "128pc", 128
     
     elif '8pc' in fits_file: 
         print('image is 8 parcec scale')
-        return 0 , "8pc"
+        return 0 , "8pc", 8
     
     elif '16pc' in fits_file: 
         print('image is 16 parcec scale')
-        return 0, "16pc"
+        return 2, "16pc", 16
     
     elif '32pc' in fits_file: 
         print('image is 32 parcec scale')
-        return 2, "32pc"
+        return 4, "32pc", 32
     
     elif '64pc' in fits_file:
         print('image is 64 parcec scale')
-        return 4, "64pc"
+        return 8, "64pc", 64
 
     elif '256pc' in fits_file:
         print('image is 256 parcec scale')
-        return 16, "256pc"
+        return 32, "256pc", 256
     
     elif '512pc' in fits_file:
         print('image is 512 parcec scale')
-        return 32, "512pc"
+        return 64, "512pc", 512
     
     elif '1024pc' in fits_file:
         print('image is 1024 parcec scale')
-        return 64, "1024pc"
+        return 128, "1024pc", 1024
 
     else:
         print('invalid fits file')
@@ -283,7 +283,7 @@ def getDistance(fits_file):
     else:
         print("improper file")
 
-def txtToFilaments(result_file, csv_file_path, blocked_data, fits_out_path, scale_factor, original_header):
+def txtToFilaments(result_file, csv_file_path, blocked_data, fits_out_path, scale_factor, new_header, original_data, original_header, interpolate_path, img_scale_int, scalepix):
     expected_header = "s p x y z fg_int bg_int"
 
     print(f' working on {result_file}')
@@ -332,15 +332,17 @@ def txtToFilaments(result_file, csv_file_path, blocked_data, fits_out_path, scal
     # Remove NaN values
 
     y_coords = pd.to_numeric(df["y"], errors="coerce")
+
+    intensity = pd.to_numeric(df["fg_int"], errors="coerce")
     # Remove NaN values
 
-    coords = pd.DataFrame({"x": x_coords, "y": y_coords}).dropna()
+    coords = pd.DataFrame({"x": x_coords, "y": y_coords, "intensity": intensity}).dropna()
 
     # Now you can safely round and convert both x and y together
     x_coords_cleaned = [int(round(x)) for x in coords["x"]]
     y_coords_cleaned = [int(round(y)) for y in coords["y"]]
 
-    assert(len(x_coords_cleaned)==len(y_coords_cleaned))
+    assert(len(x_coords_cleaned)== len(y_coords_cleaned) and len(y_coords_cleaned) == len(coords["intensity"]))
     coordinates = list(zip(x_coords_cleaned,y_coords_cleaned))
 
 
@@ -361,9 +363,11 @@ def txtToFilaments(result_file, csv_file_path, blocked_data, fits_out_path, scal
             if s_value not in filament_dict:
                 filament_dict[s_value] = []  # Initialize the list for this s value
             # Append the (x, y) coordinates as a tuple
-            filament_dict[s_value].append((row['x'], row['y']))
+            filament_dict[s_value].append((int(round(row['x'])), int(round(row['y'])), row['fg_int']))
 
-    hdu = fits.PrimaryHDU(gray_image, header=original_header)
+    interpolate(filament_dict, new_header, original_header, original_data, interpolate_path, img_scale_int, scalepix)
+
+    hdu = fits.PrimaryHDU(gray_image, header=new_header)
     time.sleep(1)  # Pause for 1 second before writing
     hdu.writeto(fits_out_path, overwrite=True)
     print('Success, fits file created from SOAX')
@@ -371,7 +375,6 @@ def txtToFilaments(result_file, csv_file_path, blocked_data, fits_out_path, scal
     return filament_dict, gray_image
 
 def restore_size(fits_path, data, header, scale_factor):
-    scale_factor = 2*scale_factor
     data = upscale_image(data, scale_factor)
     hdu = fits.PrimaryHDU(data, header=header)
     time.sleep(1)  # Pause for 1 second before writing
@@ -379,75 +382,162 @@ def restore_size(fits_path, data, header, scale_factor):
 
     
 
-# functions below are For F function only:
+def interpolate(dict, new_header, original_header, original_data, path, img_scale_int, scalepix):
 
-# def computeF(filament_dict, noise, gray_image,t,c, s=1000, v=500):
-#     #Computer average length
-#     total_filaments = len(filament_dict)
-#     total_pixels = sum(len(filaments) for filaments in filament_dict.values())
-#     average_tuples_per_key = total_pixels / total_filaments if total_filaments > 0 else 0
-#     #get number intersections
-#     intersections = len(getSkeletonIntersection(np.array(gray_image)))
-#     #get total number of pixels
-#     pix_total = np.sum(gray_image)
-#     # Create a mask where noise map values are below the threshold
-#     mask = noise < t
-#     # Use the mask to select values from the binary image and sum them
-#     noise_sum = np.sum(gray_image[mask])
+    wcs_orig = WCS(original_header)
+    wcs_blocked = WCS(new_header)
+    final_image = np.zeros_like(original_data)
 
-#     return -pix_total + c*noise_sum, -pix_total + c*noise_sum - s*average_tuples_per_key + v*intersections
+    filaments = dict.values()
+    for filament in filaments:
+        x_coords = []
+        y_coords = []
+        intensity = []
+        gray_image = np.zeros_like(original_data)
+        for pixel in filament:
+            x_coords.append(pixel[0])
+            y_coords.append(pixel[1])
+            intensity.append(pixel[2])
+        world_coords = wcs_blocked.pixel_to_world(x_coords, y_coords)
+        x_original, y_original = wcs_orig.world_to_pixel(world_coords)
+        # Filter out NaN coordinates and ensure coordinates are valid
+        coordinates = [(x, y) for x, y in zip(x_original, y_original) if not (np.isnan(x) or np.isnan(y))]
 
+        # # Ensure coordinates are within the image bounds
+        # for (x, y, i) in coordinates:
+        #     x = int(round(x))  # Round to nearest integer
+        #     y = int(round(y))  # Round to nearest integer
+        #     if 0 <= x < gray_image.shape[1] and 0 <= y < gray_image.shape[0]:
+        #         gray_image[y, x] = 1  # Mark the pixel as i for intensity
 
-# def neighbours(x, y, image):
-#     """Return 8-neighbours of image point P1(x,y), in a clockwise order"""
-#     img = image
-#     x_1, y_1, x1, y1 = x - 1, y - 1, x + 1, y + 1
-#     return [img[x_1][y], img[x_1][y1], img[x][y1], img[x1][y1], img[x1][y], img[x1][y_1], img[x][y_1], img[x_1][y_1]]
+        # new_image = normalize_image(gray_image)
+        # new_image = connect_points_bw(new_image)
+        new_image = connect_points_sequential(coordinates, np.shape(original_data), img_scale_int, scalepix, original_data)
+        final_image+=new_image
 
-# def getSkeletonIntersection(skeleton):
-#     """ Given a skeletonised image, it will give the coordinates of the intersections of the skeleton.
+    # Save the output image as a FITS file
+    hdu = fits.PrimaryHDU(final_image, header=original_header)
+    hdu.writeto(path, overwrite=True)
+
+def normalize_image(image):
+    """Normalize the image so that all pixels are between 0 and 255."""
+    # Find the minimum and maximum pixel values in the image
+    min_val = np.min(image)
+    max_val = np.max(image)
     
-#     Keyword arguments:
-#     skeleton -- the skeletonised image to detect the intersections of
+    # Normalize the image: scale it to be between 0 and 255
+    normalized_image = (image - min_val) / (max_val - min_val) * 255
     
-#     Returns: 
-#     List of 2-tuples (x,y) containing the intersection coordinates
-#     """
-#     validIntersection = [[0,1,0,1,0,0,1,0],[0,0,1,0,1,0,0,1],[1,0,0,1,0,1,0,0],
-#                          [0,1,0,0,1,0,1,0],[0,0,1,0,0,1,0,1],[1,0,0,1,0,0,1,0],
-#                          [0,1,0,0,1,0,0,1],[1,0,1,0,0,1,0,0],[0,1,0,0,0,1,0,1],
-#                          [0,1,0,1,0,0,0,1],[0,1,0,1,0,1,0,0],[0,0,0,1,0,1,0,1],
-#                          [1,0,1,0,0,0,1,0],[1,0,1,0,1,0,0,0],[0,0,1,0,1,0,1,0],
-#                          [1,0,0,0,1,0,1,0],[1,0,0,1,1,1,0,0],[0,0,1,0,0,1,1,1],
-#                          [1,1,0,0,1,0,0,1],[0,1,1,1,0,0,1,0],[1,0,1,1,0,0,1,0],
-#                          [1,0,1,0,0,1,1,0],[1,0,1,1,0,1,1,0],[0,1,1,0,1,0,1,1],
-#                          [1,1,0,1,1,0,1,0],[1,1,0,0,1,0,1,0],[0,1,1,0,1,0,1,0],
-#                          [0,0,1,0,1,0,1,1],[1,0,0,1,1,0,1,0],[1,0,1,0,1,1,0,1],
-#                          [1,0,1,0,1,1,0,0],[1,0,1,0,1,0,0,1],[0,1,0,0,1,0,1,1],
-#                          [0,1,1,0,1,0,0,1],[1,1,0,1,0,0,1,0],[0,1,0,1,1,0,1,0],
-#                          [0,0,1,0,1,1,0,1],[1,0,1,0,0,1,0,1],[1,0,0,1,0,1,1,0],
-#                          [1,0,1,1,0,1,0,0]]
-#     image = skeleton.copy() / 255
-#     intersections = []
-#     for x in range(1, len(image) - 1):
-#         for y in range(1, len(image[x]) - 1):
-#             # If we have a white pixel
-#             if image[x][y] == 1:
-#                 neighbors = neighbours(x, y, image)
-#                 if neighbors in validIntersection:
-#                     intersections.append((y, x))
+    # Convert the normalized image to integers
+    normalized_image = np.round(normalized_image).astype(np.uint8)
     
-#     # Filter intersections to make sure we don't count them twice or ones that are very close together
-#     filtered_intersections = []
-#     for point1 in intersections:
-#         add_point = True
-#         for point2 in filtered_intersections:
-#             if ((point1[0] - point2[0])**2 + (point1[1] - point2[1])**2) < 10**2:
-#                 add_point = False
-#                 break
-#         if add_point:
-#             filtered_intersections.append(point1)
-    
-#     return filtered_intersections
+    return normalized_image
 
 
+def connect_points_sequential(points, image_shape, img_scale_int, scalepix, original_data):
+    """
+    Connects points in sequential order with straight lines.
+    
+    Parameters:
+        points (list of tuple): List of points (x, y) to connect in sequential order.
+        image_shape (tuple): Shape of the output image (height, width).
+
+    Returns:
+        numpy.ndarray: Black-and-white image with points connected by lines.
+    """
+    #get width
+    radius =  int(img_scale_int/scalepix)
+    # Create a blank black image
+
+    points = [(int(x), int(y)) for x, y in points]
+
+    output_array = np.zeros(image_shape, dtype=np.uint8)
+
+      # Draw lines between consecutive points
+    for i in range(len(points) - 1):
+        x1, y1 = points[i]
+        if(original_data[y1,x1] > 3000):
+            x2, y2 = points[i + 1]
+            cv2.line(output_array, (x1, y1), (x2, y2), 255, thickness=radius)
+            cv2.circle(output_array, (x1, y1), radius, 255, thickness=-1)  # Filled circle
+
+    return output_array
+
+
+def threshSkel(fits_file, out_path, prob = 15):
+
+    with fits.open(fits_file, mode="update") as hdul:
+        original_header = hdul[0].header
+        image_data = np.array(hdul[0].data) 
+
+        # Thresholding
+        _, thresh1 = cv2.threshold(image_data, prob, 255, cv2.THRESH_BINARY)
+
+        # Skeletonize the thresholded image
+        skeleton_image = skeletonize(thresh1 > 0).astype(np.uint8)  # Convert to binary for skeletonize
+        # Plotting the images side-by-side
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        axes[0].imshow(image_data, cmap='gray')
+        axes[0].set_title('Original Image')
+        axes[0].axis('off')
+
+        axes[1].imshow(thresh1, cmap='gray')
+        axes[1].set_title('Thresholded Image')
+        axes[1].axis('off')
+
+        axes[2].imshow(skeleton_image, cmap='gray')
+        axes[2].set_title('Skeletonized Image')
+        axes[2].axis('off')
+
+        plt.tight_layout()
+        plt.show()
+
+        #save image
+        skeleton_image = skeleton_image.astype(np.uint16)
+            # Update the FITS file with the cleaned image
+        hdul[0].data = skeleton_image
+        hdul.flush()
+
+import numpy as np
+from astropy.io import fits
+from scipy.ndimage import uniform_filter
+
+def cleanImage(fits_path, original_data, radius, threshold = 15000):
+    """
+    Cleans the skeletonized image by filtering pixels based on the sum of values
+    within a specified radius in the original image.
+
+    Parameters:
+        fits_path (str): Path to the FITS file containing the skeletonized image.
+        original_data (numpy.ndarray): The original image array for reference.
+        radius (int): Radius for the region to search around each pixel.
+        threshold (float): Threshold for the sum of pixel values in the radius.
+
+    Returns:
+        None: The cleaned skeletonized image is saved to the same FITS file.
+    """
+    # Open the FITS file and load the skeletonized image data
+    with fits.open(fits_path, mode="update") as hdul:
+        original_header = hdul[0].header
+        skeletonized_image = np.array(hdul[0].data)
+        
+        # Normalize the original image if needed (same scale as skeletonized_image)
+        original_data = original_data / np.max(original_data)
+        
+        # Calculate the sum of pixel values within the specified radius
+        kernel_size = 2 * radius + 1
+        local_sum = uniform_filter(original_data, size=kernel_size, mode='constant')
+        
+        # Apply the threshold condition to the skeletonized image
+        clean_image = np.copy(skeletonized_image)
+        mask = local_sum < threshold
+        clean_image[mask] = 0
+        
+        # Update the FITS file with the cleaned image
+        hdul[0].data = clean_image
+        hdul.flush()
+
+if __name__ == "__main__":
+    print("hi jake")
+    skel_path = r"C:\Users\HP\Documents\JHU_Academics\Research\Soax_results_blocking_V2\ngc0628\Composite\ngc0628_F770W_starsub_anchored_CDDss0064pc_arcsinh0p1.fits_Composite.fits"
+    threshSkel(skel_path, skel_path)
