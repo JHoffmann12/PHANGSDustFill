@@ -20,6 +20,8 @@ from scipy.ndimage import gaussian_filter
 import time 
 import math
 from astropy.wcs import WCS
+import random 
+
 
 def ThresholdSkel(image_data, original_header, fits_out_path):
     image_data = 255 * (image_data - np.min(image_data)) / (np.max(image_data) - np.min(image_data))
@@ -401,7 +403,7 @@ def interpolate(dict, new_header, original_header, original_data, path, img_scal
         world_coords = wcs_blocked.pixel_to_world(x_coords, y_coords)
         x_original, y_original = wcs_orig.world_to_pixel(world_coords)
         # Filter out NaN coordinates and ensure coordinates are valid
-        coordinates = [(x, y) for x, y in zip(x_original, y_original) if not (np.isnan(x) or np.isnan(y))]
+        coordinates = [(x, y, i) for x, y, i in zip(x_original, y_original, intensity) if not (np.isnan(x) or np.isnan(y))]
 
         # # Ensure coordinates are within the image bounds
         # for (x, y, i) in coordinates:
@@ -413,6 +415,7 @@ def interpolate(dict, new_header, original_header, original_data, path, img_scal
         # new_image = normalize_image(gray_image)
         # new_image = connect_points_bw(new_image)
         new_image = connect_points_sequential(coordinates, np.shape(original_data), img_scale_int, scalepix, original_data)
+        # assert(np.sum(new_image != 0))
         final_image+=new_image
 
     # Save the output image as a FITS file
@@ -449,18 +452,19 @@ def connect_points_sequential(points, image_shape, img_scale_int, scalepix, orig
     radius =  int(img_scale_int/scalepix)
     # Create a blank black image
 
-    points = [(int(x), int(y)) for x, y in points]
+    points = [(int(x), int(y), i) for x, y,i in points]
 
     output_array = np.zeros(image_shape, dtype=np.uint8)
 
       # Draw lines between consecutive points
     for i in range(len(points) - 1):
-        x1, y1 = points[i]
-        if(original_data[y1,x1] > 3000):
-            x2, y2 = points[i + 1]
-            cv2.line(output_array, (x1, y1), (x2, y2), 255, thickness=radius)
-            cv2.circle(output_array, (x1, y1), radius, 255, thickness=-1)  # Filled circle
+        x1, y1 = (points[i][0], points[i][1])
+        x2, y2 = (points[i+1][0], points[i+1][1])
+        value = original_data[y1,x1]*255
+        cv2.line(output_array, (x1, y1), (x2, y2), value, thickness=radius)
+        cv2.circle(output_array, (x1, y1), radius, value, thickness=radius)  # Filled circle
 
+    # assert(np.sum(output_array != 0))
     return output_array
 
 
@@ -537,7 +541,93 @@ def cleanImage(fits_path, original_data, radius, threshold = 15000):
         hdul[0].data = clean_image
         hdul.flush()
 
+
+
+def create_better_composite(directory, blocked_header, original_header, original_data, save_path):
+    # Ensure the output directory exists
+    filament_dict = {}
+
+    for file in os.listdir(directory):
+        if file.endswith(".csv"):
+            print(f"Processing {file}")
+            # Read the CSV file
+            file_path = os.path.join(directory, file)
+            df = pd.read_csv(file_path)
+
+            # Filter and group coordinates by 's'
+            df = df[df['s'].apply(lambda x: isinstance(x, str) and "#" not in x)]
+            df['s'] = df['s'].astype(int)
+            grouped = df.groupby('s').apply(
+                lambda group: [(float(x), float(y), 1) for x, y in zip(group['x'], group['y'])]
+            )
+
+            # Convert grouped data to a temporary dictionary
+            temp_dict = grouped.to_dict()
+
+            # Merge temp_dict into filament_dict
+            for s_key, new_filament in temp_dict.items():
+                merged = False
+                for existing_key, existing_filament in list(filament_dict.items()):
+                    # Round coordinates for merging checks
+                    rounded_new = [(int(round(x)), int(round(y))) for x, y,i in new_filament]
+                    rounded_existing = [(int(round(x)), int(round(y))) for x, y,i in existing_filament]
+
+                    # Check for shared points within +/- 1 in x or y
+                    shared_points = [
+                        (x1, y1) for x1, y1 in rounded_existing
+                        for x2, y2 in rounded_new
+                        if are_points_close((x1, y1), (x2, y2))
+                    ]
+
+                    # Check if one or more points meet the proximity condition
+                    if len(shared_points) >= 1:
+                        # Append the larger/smaller filament without merging
+                        # if len(new_filament) > len(existing_filament):
+                        #     filament_dict[existing_key] = new_filament
+                        # else:
+                        #     filament_dict[existing_key] = existing_filament
+                        if(len(new_filament) > 4*len(existing_filament)): #avoid huge filaments
+                            filament_dict[existing_key] = existing_filament
+                        elif(len(new_filament) < 4*len(existing_filament)): #avoid iny filaments
+                            filament_dict[existing_key] = new_filament
+                        else: 
+                            filament_dict[existing_key] = random.choice([new_filament, existing_filament])
+                        merged = True
+                        for point in filament_dict[existing_key]: #update intensity for repeated points
+                            rounded_point = (round(point[0]), round(point[1]))
+                            # Check if the rounded point exists in shared_points
+                            if rounded_point in shared_points:
+                                point = list(point)
+                                point[2] = point[2] + 1
+                                point = tuple(point)
+                        break
+
+                if not merged:
+                    # Add as a new filament if no merging occurred
+                    if not filament_dict:
+                        filament_dict[s_key] = new_filament
+                    else:
+                        largest_key = max(filament_dict.keys()) + 1
+                        filament_dict[largest_key] = new_filament
+
+
+    # Call the interpolate function with the final filament_dict
+    interpolate(filament_dict, blocked_header, original_header, original_data, save_path, 1, 1)
+
+def are_points_close(p1, p2, close = 7):
+    return abs(p1[0] - p2[0]) <= close and abs(p1[1] - p2[1]) <= close
+
+
+
 if __name__ == "__main__":
-    print("hi jake")
-    skel_path = r"C:\Users\HP\Documents\JHU_Academics\Research\Soax_results_blocking_V2\ngc0628\Composite\ngc0628_F770W_starsub_anchored_CDDss0064pc_arcsinh0p1.fits_Composite.fits"
-    threshSkel(skel_path, skel_path)
+    fits_path = r"C:\Users\HP\Documents\JHU_Academics\Research\Soax_results_blocking_V2\ngc0628\BkgSubDivRMS\ngc0628_F770W_starsub_anchored_CDDss0008pc_arcsinh0p1.fits_divRMS.fits"
+    with fits.open(fits_path) as hdul:
+        image_data = np.array(hdul[0].data)  # Assuming the image data is in the primary HDU
+        image_data = np.nan_to_num(image_data, nan=0.0)  # Replace NaNs with 0
+        original_header = hdul[0].header
+    fits_path1 = r"C:\Users\HP\Documents\JHU_Academics\Research\Soax_results_blocking_V2\ngc0628\SOAXOutput\64pc\best_param1\ngc0628_F770W_starsub_anchored_CDDss0064pc_arcsinh0p1.fits_Blocked--ridge0.02000--stretch1.500.txt_to_FITS.fits"
+    with fits.open(fits_path1) as hdul1:
+        blocked_header = hdul1[0].header
+    directory = r"C:\Users\HP\Documents\JHU_Academics\Research\Soax_results_blocking_V2\ngc0628\SOAXOutput\64pc\best_param1"
+    save_path = r"C:\Users\HP\Documents\JHU_Academics\Research\Soax_results_blocking_V2\ngc0628\SOAXOutput\64pc\best_param1\BestComposite\Best.fits"
+    create_better_composite(directory, blocked_header, original_header, image_data, save_path)

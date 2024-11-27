@@ -92,7 +92,7 @@ for galaxy_folder in os.listdir(galaxy_dir):
                     assert(os.path.isfile(input_image))
 
                     print("starting Soax")
-                    cmdString = f'"{batch}" soax -i "{input_image}" -p "{param_text}" -s "{output_dir}" --ridge 0.02 0.0075 0.075 --stretch 1.5 0.5 3'
+                    cmdString = f'"{batch}" soax -i "{input_image}" -p "{param_text}" -s "{output_dir}" --ridge 0.02 0.0075 0.06 --stretch 1.5 0.5 3'
                     subprocess.run(cmdString, shell=True)
                     print(f"Complete Soax on {fits_file}")
 
@@ -106,7 +106,7 @@ for galaxy_folder in os.listdir(galaxy_dir):
                             base_result_file = os.path.splitext(result_file)[0]  # removes the .txt extension
                             skel_path = fr"{galaxy_folder}\SoaxSkel\{base_result_file}_to_Skel.fits"
                             result_file = fr"{galaxy_folder}\SOAXOutput\{img_scale}\{base_param_file}\{result_file}"
-                            filament_dict, soax_data = identify.txtToFilaments(result_file, csv_file_path, blocked_data, fits_out_path, scale_factor, new_header, divRMS, original_header, interpolate_path, img_scale_int/2, scalepix) #use new_header for WCS and blocked_data dimesnions
+                            filament_dict, soax_data = identify.txtToFilaments(result_file, csv_file_path, blocked_data, fits_out_path, scale_factor, new_header, image_data, original_header, interpolate_path, 1,1) #use new_header for WCS and blocked_data dimesnions
     
                     #generate composite/probability image
                     directory = fr"{galaxy_folder}\SOAXOutput\{img_scale}\{base_param_file}\Interpolate"
@@ -114,10 +114,17 @@ for galaxy_folder in os.listdir(galaxy_dir):
                     output_directory = fr"{galaxy_folder}\Composite"
                     common_string = fits_file
                     identify.create_composite_image(directory, output_name, output_directory, common_string)
-                    skel_path = fr"{galaxy_folder}\Composite\{fits_file}_Composite.fits"
-                    identify.threshSkel(skel_path, skel_path, prob = 90) #prob is out of 255
-                    radius = int(img_scale_int/scalepix)
+                    directory = fr"{galaxy_folder}\SOAXOutput\{img_scale}\{base_param_file}"
+                    save_path = fr"{galaxy_folder}\SOAXOutput\{img_scale}\{base_param_file}\BestComposite"
+                    # identify.create_better_composite(directory, new_header, original_header, image_data, save_path)
+                    # skel_path = fr"{galaxy_folder}\Composite\{fits_file}_Composite.fits"
+                    # identify.threshSkel(skel_path, skel_path, prob = 90) #prob is out of 255
+                    # radius = int(img_scale_int/scalepix)
                     # identify.cleanImage(skel_path, divRMS, radius)
 
 
-
+#get 99th % value for bkgdivRMS image and try different percentile 
+# normalizations--> look for areas that become 65536, equivalent conversion btwn galaxies and scales...99% of 128pc to normalize 128 and lower which is ~40k
+#Scatter plot to compare intensity and probability
+#Convolution with sigma ~4 to blend filaments
+#Get a probability map and intensity map seperately
