@@ -29,12 +29,13 @@ import AnalysisFuncs as AF
 
 class FilamentMap:
 
-    def __init__(self,  Scalepix, HomeDir, FitsFile):
+    def __init__(self,  Scalepix, HomeDir, FitsFile, Galaxy):
         fits_path = os.path.join(HomeDir, FitsFile)
         with fits.open(fits_path) as hdul:
             OrigData = np.array(hdul[0].data)  # Assuming the image data is in the primary HDU
             OrigData = np.nan_to_num(OrigData, nan=0.0)  # Replace NaNs with 0
             OrigHeader = hdul[0].header
+        self.Galaxy = Galaxy
         self.IntensityMap = np.zeros_like(OrigData)
         self.ProbabilityMap = np.zeros_like(OrigData)
         self.BkgSubMap = np.zeros_like(OrigData)
@@ -95,11 +96,13 @@ class FilamentMap:
 
     def _getBlockFactor(self):
         file_name = self.FitsFile
-        folder_path =  self.HomeDir
-        # Extract numbers that are powers of two from the file names in the folder
+        folder_path = self.HomeDir
+        
+        # Pattern to match valid powers of two
         power_of_two_pattern = re.compile(r'(?<!\d)0*(8|16|32|64|128|256|512|1024)(?!\d)')
         powers_of_two = []
 
+        # Extract powers of two from filenames in the folder
         for f in os.listdir(folder_path):
             match = power_of_two_pattern.search(f)
             if match:
@@ -108,8 +111,8 @@ class FilamentMap:
         if not powers_of_two:
             raise ValueError("No valid power of two found in file names.")
         
-        # Sort the powers of two in ascending order
-        sorted_powers = sorted(powers_of_two)
+        # Sort powers of two in ascending order
+        sorted_powers = sorted(set(powers_of_two))
 
         # Extract the power of two from the current file name
         current_match = power_of_two_pattern.search(file_name)
@@ -118,17 +121,26 @@ class FilamentMap:
         
         current_power = int(current_match.group(0))
 
-        # Find the ranking (0 for minimum, 2 for second smallest, etc.)
+        # Ensure the current power exists in the list
         if current_power not in sorted_powers:
             raise ValueError(f"Power of two {current_power} from '{file_name}' not found in folder.")
-        
-        rank = sorted_powers.index(current_power) * 2
-        print(f"Block Factor: {rank}")
-        return rank
+
+        # Determine the rank (index) of the current power of two in the sorted list
+        rank = sorted_powers.index(current_power)
 
 
-    def _GenerateBlankRegionMask(self, Sim): # "_" indicates a protected method
-        copy_image = copy.deepcopy(self.OrigData)
+        # Return the block factor as 2 raised to the rank
+        block_factor = 2 ** rank
+        if(block_factor == 1):
+            block_factor = 0
+
+        print(f"Block Factor: {block_factor}")
+
+        return block_factor
+
+
+    def _GenerateBlankRegionMask(self, Sim, data_to_mask): # "_" indicates a protected method
+        copy_image = copy.deepcopy(data_to_mask)
         #set thresholding for masking blank regions
         if(Sim):
             threshold = .05 # for simulated image
@@ -169,26 +181,34 @@ class FilamentMap:
 
 
     def SetBkgSub(self, Sim = False):
-        mask = self._GenerateBlankRegionMask(Sim)
-        #copy data
-        data = copy.deepcopy(self.OrigData.astype(np.float64)) #photutils should take float64
-        #subtract bkg
-        bkg_estimator = MedianBackground()
-        bkg = Background2D(data, box_size=round(10.*self.Scalepix/2.)*2+1, coverage_mask = mask,filter_size=(3,3), bkg_estimator=bkg_estimator) #Very different RMS with mask. Minimum is MUCH larger
-        data -= bkg.background #subtract bkg
-        data[data < 0] = 0 #Elimate neg values. This is over estimating the background and messes up fits files
+        try:
+            mask = self._GenerateBlankRegionMask(Sim, self.BlockData)
+            #copy data
+            data = copy.deepcopy(self.BlockData.astype(np.float64)) #photutils should take float64
+            #subtract bkg
+            bkg_estimator = MedianBackground()
+            bkg = Background2D(data, box_size=round(10.*self.Scalepix/2.)*2+1, coverage_mask = mask,filter_size=(3,3), bkg_estimator=bkg_estimator) #Very different RMS with mask. Minimum is MUCH larger
+            data -= bkg.background #subtract bkg
+            data[data < 0] = 0 #Elimate neg values. This is over estimating the background and messes up fits files
 
-        #bkg sub/RMS map
-        noise = bkg.background_rms
-        noise[noise == 0] = 10**-10 #replace with small number...if noise = 0, we are in background, and output will be set to 0 anyway in two lines
 
-        divRMS = data/noise
-        divRMS[mask] = 0 #masked regions are zero...can change to some reasonable value but doesn't really matter for SOAX
-        self.BkgSubMap = divRMS
+            print(f"bkg sub max: {np.max(data)}")
+            #bkg sub/RMS map
+            noise = bkg.background_rms
+            print(f"noise max: {np.max(noise)}")
+            noise[noise == 0] = 10**-3 #replace with small number...if noise = 0, we are in background, and output will be set to 0 anyway in two lines
+
+            divRMS = data/noise
+            divRMS[mask] = 0 #masked regions are zero...can change to some reasonable value but doesn't really matter for SOAX
+            self.BkgSubMap = divRMS
+
+        except ValueError:
+            print("Error: Image is majoprity Black pixels. Invalid Data to reduce noise. Bkg Sub Map is set to Blocked Data. ")
+            self.BkgSubMap = self.BlockData
 
         #save as fits if Write is true
         out_path = fr"{self.HomeDir}\BkgSubDivRMS\{self.FitsFile}_divRMS.fits"
-        hdu = fits.PrimaryHDU(divRMS, header=self.OrigHeader)
+        hdu = fits.PrimaryHDU(self.BkgSubMap, header=self.BlockHeader)
         hdu.writeto(out_path, overwrite=True)
 
 
@@ -229,12 +249,12 @@ class FilamentMap:
             self.BlockHeader['CRPIX2'] = (self.OrigHeader['CRPIX2'] / self.BlockFactor) + .4867 #shift for some reason?
 
             # Reproject data
-            reprojected_data, _ = reproject_exact((self.BkgSubMap, self.OrigHeader), self.BlockHeader, shape_out=(np.shape(self.BlockData)))
+            reprojected_data, _ = reproject_exact((self.OrigData, self.OrigHeader), self.BlockHeader, shape_out=(np.shape(self.BlockData)))
 
             # Crop NaN border (if necessary)
             self.BlockData = self._crop_nan_border(reprojected_data, (np.shape(self.BlockData)))
         else:
-            self.BlockData = self.BkgSubMap
+            self.BlockData = self.OrigData
 
         assert(np.sum(self.BlockData) !=0)
         print(f"Block Max: {np.max(self.BlockData)}")
@@ -305,7 +325,7 @@ class FilamentMap:
             subprocess.run(cmdString, shell=True)
             print(f"Complete Soax on {self.FitsFile}, converting set to FITS")
             self._ConvertSoaxToFits(output_dir, base_param_file)
-            self._CreateComposite(base_param_file)
+            self.CreateComposite(base_param_file)
 
     def _ConvertSoaxToFits(self, outputDir, base_param_file):
         for result_file in os.listdir(outputDir):
@@ -406,7 +426,7 @@ class FilamentMap:
             cv2.circle(output_array, (x1, y1), 1, 1, thickness= 1)  # Filled circle
         return output_array
     
-    def _CreateComposite(self, base_param_file):
+    def CreateComposite(self, base_param_file):
         output_directory = fr"{self.HomeDir}\Composite"
         directory = fr"{self.HomeDir}\SOAXOutput\{self.Scale}\{base_param_file}\Interpolate"
         output_name = fr"{self.FitsFile}_Composite"
@@ -469,11 +489,17 @@ class FilamentMap:
         else: 
             self.IntensityMap[self.Composite !=0] = self.BkgSubMap[self.Composite!=0]
 
-    def DisplayProbIntensityPlot(self, Orig = True):
+    def DisplayProbIntensityPlot(self, galaxy_dir, Orig=True, Write=False, verbose=False):
+
         # Flatten the images
         probability_flat = self.ProbabilityMap.flatten()
         probability_flat = np.round(100 / 255 * probability_flat).astype(int)
         intensity_flat = self.IntensityMap.flatten()
+
+        # Remove entries where the probability equals zero
+        valid_indices = probability_flat != 0
+        probability_flat = probability_flat[valid_indices]
+        intensity_flat = intensity_flat[valid_indices]
 
         # Identify unique probabilities
         unique_probabilities = np.unique(probability_flat)
@@ -481,25 +507,48 @@ class FilamentMap:
         # Group intensity values by probability
         grouped_intensities = [intensity_flat[probability_flat == prob] for prob in unique_probabilities]
 
+        # Count values in each group
+        counts = [len(group) for group in grouped_intensities]
+
+        # Compute the total number of elements across all box plots
+        total_elements = sum(counts)
+        print(f"Total number of elements across all box plots: {total_elements}")
+
         # Create box plots
         plt.figure(figsize=(10, 6))
         plt.boxplot(grouped_intensities, labels=unique_probabilities, vert=True, patch_artist=True)
 
+        # Add count annotations below x-axis labels
+        ylim = plt.ylim()
+        y_min = ylim[0]
+        annotation_y = y_min - 0.1 * (ylim[1] - ylim[0])  # Place annotations slightly below the x-axis labels
+        for i, count in enumerate(counts, start=1):
+            plt.text(i, annotation_y, f'{count}', ha='center', va='top', fontsize=9, color='blue')
+
+        # Adjust y-axis to leave space for text annotations
+        plt.ylim(y_min - 0.2 * (ylim[1] - ylim[0]), ylim[1])
+
         # Customize plot
-        plt.xlabel('Probability(%) from Soax')
-        if(Orig):
+        plt.xlabel('Probability (%) from Soax')
+        if Orig:
             plt.ylabel('Intensity value in original data')
-        else: 
+        else:
             plt.ylabel('Intensity value in bkg subtracted data')
-        plt.title('Box Plot of Intensity Values at Each Probability')
+        plt.title(f'Box Plot of Intensity Values at Each Probability for {self.Galaxy} at {self.Scale} for {total_elements} pixels')
         plt.xticks(rotation=45)
         plt.grid(axis='y', linestyle='--', alpha=0.7)
 
+        # Save or display the plot
         plt.tight_layout()
-        plt.show()
+        if Write:
+            plt.savefig(f"{galaxy_dir}/Figures/ProbIntensityPlot_{self.Galaxy}_{self.Scale}_{Orig}.png")
+        if verbose:
+            plt.show()
 
 
-    def BlurComposite(self):
+
+
+    def BlurComposite(self, set_blur_as_prob = True):
         struct_width = self.Scale.replace('pc',"")
         struct_width = int(struct_width)
         # Convert structure width from parsecs to pixels
@@ -512,6 +561,8 @@ class FilamentMap:
         blurred_image = gaussian_filter(self.Composite, sigma=sigma)
 
         self.Composite = blurred_image
+        if(set_blur_as_prob):
+            self.ProbabilityMap = blurred_image
 
     def ReHashComposite(self, ProbabilityThreshPercentile, minPixBoxSize):
         print(f"Blur Max: {np.max(self.Composite)}")
@@ -534,10 +585,20 @@ class FilamentMap:
                 for y in range(height):
                     img[top:top+height, left:left+width] = 0
 
-        # self.Composite = img
+        self.Composite = img
 
         output_directory = fr"{self.HomeDir}\Composite"
         output_name = fr"{self.FitsFile}_Composite_{ProbabilityThreshPercentile}"
         output_fits_path = os.path.join(output_directory, output_name + '.fits')
         hdu = fits.PrimaryHDU(data=img, header=self.OrigHeader)
         hdu.writeto(output_fits_path, overwrite=True)
+    
+    def getGalaxy(self):
+        return self.Galaxy   
+             
+    def getBkgSubMap(self):
+        return self.BkgSubMap  
+    
+    def getScale(self):
+        return self.Scale  
+                                
