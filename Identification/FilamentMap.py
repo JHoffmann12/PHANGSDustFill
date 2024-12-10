@@ -206,11 +206,15 @@ class FilamentMap:
             print("Error: Image is majoprity Black pixels. Invalid Data to reduce noise. Bkg Sub Map is set to Blocked Data. ")
             self.BkgSubMap = self.BlockData
 
+        # Save a PNG for SOAX
+        save_png_path = fr"{self.HomeDir}\BlockedPng\{self.FitsFile}_Blocked.png"
+        pngData = self.BkgSubMap.astype(np.uint16)
+        cv2.imwrite(save_png_path, pngData)
+        
         #save as fits if Write is true
         out_path = fr"{self.HomeDir}\BkgSubDivRMS\{self.FitsFile}_divRMS.fits"
         hdu = fits.PrimaryHDU(self.BkgSubMap, header=self.BlockHeader)
         hdu.writeto(out_path, overwrite=True)
-
 
     def ScaleBkgSub(self):
         file = fr"{self.HomeDir}\BkgSubDivRMS\{self.FitsFile}_divRMS.fits"
@@ -233,6 +237,10 @@ class FilamentMap:
             
             # Optionally, save the modified FITS file (if you are not using 'update' mode)
             hdul.flush()  # Writes changes to the file
+        # Save a PNG for SOAX
+        save_png_path = fr"{self.HomeDir}\BlockedPng\{self.FitsFile}_Blocked.png"
+        pngData = self.BkgSubMap.astype(np.uint16)
+        cv2.imwrite(save_png_path, pngData)
 
 
     def _getTopVal(self):
@@ -258,10 +266,7 @@ class FilamentMap:
 
         assert(np.sum(self.BlockData) !=0)
         print(f"Block Max: {np.max(self.BlockData)}")
-        # Save a PNG for SOAX
-        save_png_path = fr"{self.HomeDir}\BlockedPng\{self.FitsFile}_Blocked.png"
-        pngData = self.BlockData.astype(np.uint16)
-        cv2.imwrite(save_png_path, pngData)
+
 
         # Write the modified data and header to a new FITS file
         if(Write):
