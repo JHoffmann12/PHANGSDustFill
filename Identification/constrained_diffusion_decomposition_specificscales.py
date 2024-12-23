@@ -98,6 +98,11 @@ def constrained_diffusion_decomposition_specificscales(data,scales_pix,scales_pi
 
             data = data - diff_image
             # data = ndimage.gaussian_filter(data, kernel_size)     # !!!!
+            #_____________________________________________________________
+            #Additional smoothing?
+            #____________________________________________________________
+            #Arcsin transfrom
+            #____________________________________________________________
         result.append(channel_image)
         kernel_sizes.append(kernel_size)
         # residual.append(data)
@@ -106,15 +111,20 @@ def constrained_diffusion_decomposition_specificscales(data,scales_pix,scales_pi
 
 
 if __name__ == "__main__":
-    fname = sys.argv[1] 
+    pix_pc = 5.24
+    stdladder_pc=(2**np.array(range(3,9)))/pix_pc
+    stdladder_pc_lolim=(2**(np.array(range(3,9))-0.5))/pix_pc
+    stdladder_pc_hilim=(2**(np.array(range(3,9))+0.5))/pix_pc
+    print(f"pc range: {(2**np.array(range(3,9)))}")
+    fname = r"c:\Users\HP\Documents\JHU_Academics\Research\Soax_results_blocking_V2\OriginalMiriImages\ngc0628_F770W_starsub_anchored.fits"
     hdulist = fits.open(fname)
     data = hdulist[0].data
     data[np.isnan(data)] = 0
-    result, residual, kernel_sizes = constrained_diffusion_decomposition_specificscales(data)
+    result, residual, kernel_sizes = constrained_diffusion_decomposition_specificscales(data,stdladder_pc, stdladder_pc_lolim, stdladder_pc_hilim)
 
     nhdulist = fits.PrimaryHDU(result)
     nhdulist.header = hdulist[0].header
     nhdulist.header['DMIN'] = np.nanmin(result)
     nhdulist.header['DMAX'] = np.nanmin(result)
 
-    nhdulist.writeto(sys.argv[1] + '_scale.fits', overwrite=True)
+    nhdulist.writeto(fname + '_scale.fits', overwrite=True)

@@ -12,9 +12,17 @@ from skimage import data
 from skimage import color
 from skimage.filters import meijering, sato, frangi, hessian
 import re
+from scipy.ndimage import gaussian_filter
+
 
 plt.rcParams['figure.figsize'] = [15, 15]
 
+
+# Define a 2D Gaussian function
+def gaussian_2d(xy, x0, y0, sigma, amplitude, offset):
+    x, y = xy
+    exp_term = np.exp(-((x - x0)**2 + (y - y0)**2) / (2 * sigma**2))
+    return amplitude * exp_term + offset
 
 def pick_scales_flex(dmpc, fwhm_asec, pix_asec, min_dim_img, force_std=False):
 
@@ -28,7 +36,7 @@ def pick_scales_flex(dmpc, fwhm_asec, pix_asec, min_dim_img, force_std=False):
 
     res_pc=4.848*fwhm_asec*dmpc
     pix_pc=4.848*pix_asec*dmpc
-
+    print(f'pix pc: {pix_pc}')
     print('Evaluating standard ladder rungs:')
     #too aggressive at small end .... idxstd=(stdladder_pc_lolim>=res_pc/2.35) & (stdladder_pc_hilim/pix_pc<=0.5*min_dim_img/2.35)
     idxstd=(stdladder_pc_lolim>=1.33*res_pc/2.35) & (stdladder_pc_hilim/pix_pc<=0.5*min_dim_img/2.35)
@@ -70,8 +78,6 @@ def pick_scales_flex(dmpc, fwhm_asec, pix_asec, min_dim_img, force_std=False):
     return ladder_pc[idx]/pix_pc, ladder_pc_lolim[idx]/pix_pc, ladder_pc_hilim[idx]/pix_pc, ladder_pc[idx], ladder_pc_lolim[idx], ladder_pc_hilim[idx]
 
 
-
-
 #consider PSF matching first
 #or to a common spatial res amongst all galaxies
 miriband='f770w'
@@ -85,8 +91,8 @@ else:
 suffix='_F770W_starsub_anchored.fits'
 filedir = r"c:\Users\HP\Documents\JHU_Academics\Research\Soax_results_blocking_V2\OriginalMiriImages"
 
-extnum=1 #PREVIOUS TO STARSUB INPUTS --- initial input file extension number, changed to 0 below after writing of CDD family products
-# extnum=0 #NOW NEED IT AS 0 FOR STARSUB INPUTS
+# extnum=1 #PREVIOUS TO STARSUB INPUTS --- initial input file extension number, changed to 0 below after writing of CDD family products
+extnum=0 #NOW NEED IT AS 0 FOR STARSUB INPUTS
 fracsmooth=0.333 # to remove divots, CDD outputs will be smoothed with Gaussian kernel having sigma=fracsmooth*pcscale[or matching pixscale]
 
 
@@ -110,7 +116,7 @@ for inputpath in os.listdir(filedir):
 
         # Dynamic galaxy name matching
         filename = inputpath.split('/')[-1]
-        match = re.search(r'_jwst_miri_(ngc\d+)_', filename.lower())
+        match = re.search(r'(ngc\d+)_', filename.lower())
         if match:
             galaxytab = match.group(1)  # Extracted galaxy name (e.g., 'ngc0628')
             print(f"Extracted galaxy name: {galaxytab}")
@@ -153,6 +159,28 @@ for inputpath in os.listdir(filedir):
                 min_dim_img = np.min([header_in['NAXIS1'], header_in['NAXIS2']])
 
             hdu.info()
+
+        #___________________________
+
+        # scale_factor = 1.33
+        # fwhm_pixels = 0.2445   # Original PSF FWHM in pixels
+        # fwhm_arcsec = .269
+
+        # # Calculate the original and new sigma values
+        # sigma_original = fwhm_pixels / 2.3548
+        # sigma_new = sigma_original * scale_factor
+
+        # print(f"Original sigma: {sigma_original:.4f} pixels")
+        # print(f"New sigma after 30% increase: {sigma_new:.4f} pixels")
+
+        # # Apply Gaussian filter to the image
+        # image_in = gaussian_filter(image_in, sigma=sigma_new)
+
+        # res= scale_factor* res #arcsec
+        # pixscale= scale_factor *pixscale #arcsec
+
+        #___________________________
+        
         print(image_in.shape)
 
         # Show the image
@@ -166,9 +194,9 @@ for inputpath in os.listdir(filedir):
         print(pcscales)
         print(pixscales)
 
-        # Perform constrained diffusion decomposition
+        # Pass the modified image to your function
         result_in, residual_in, kernel_sizes = cddss.constrained_diffusion_decomposition_specificscales(
-            image_in, pixscales, pixscales_lo, pixscales_hi, e_rel=3.e-3
+            image_in, pixscales, pixscales_lo, pixscales_hi, e_rel=3.e-2
         )
         print(kernel_sizes)
 
@@ -180,10 +208,9 @@ for inputpath in os.listdir(filedir):
             header_in['SCLEPXHI'] = pixscales_hi[idx]
 
             psf_stddev = (pixscales[idx] * 2.35) * fracsmooth / 2.35  # Original stddev
-            increased_psf_stddev = psf_stddev * 1.3  # Increase PSF by 30%
 
             hduout = fits.PrimaryHDU(
-                data=convolve(image_now, Gaussian2DKernel(x_stddev=increased_psf_stddev)),
+                data=convolve(image_now, Gaussian2DKernel(x_stddev=psf_stddev)),
                 header=header_in
             )
             hduout.writeto(outfilename_prefix + '_CDDss' + str(pcscales[idx]).rjust(4, '0') + 'pc.fits', overwrite=True)
@@ -192,8 +219,8 @@ for inputpath in os.listdir(filedir):
         a = .1
         for idx in range(len(kernel_sizes)):
             with fits.open(outfilename_prefix + '_CDDss' + str(pcscales[idx]).rjust(4, '0') + 'pc.fits') as hdu:
-                image_now = hdu[0].data
-                header_now = hdu[0].header
+                image_now = hdu[extnum].data
+                header_now = hdu[extnum].header
             hduout = fits.PrimaryHDU(data=a * np.arcsinh(image_now / a), header=header_now)
             hduout.writeto(
                 outfilename_prefix + '_CDDss' + str(pcscales[idx]).rjust(4, '0') + 'pc_arcsinh0p1.fits', overwrite=True
