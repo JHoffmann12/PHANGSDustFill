@@ -50,6 +50,7 @@ class FilamentMap:
         FitsFile = os.path.splitext(FitsFile)[0]  # removes the .fits extension
         self.FitsFile = FitsFile
         self.BlockFactor = self._getBlockFactor()
+        self.BlankRegionMask = self._GenerateBlankRegionMask(Sim = False, data_to_mask = OrigData)
         if(self.BlockFactor != 0):
             self.BlockData = np.zeros((int(self.OrigData.shape[0] / self.BlockFactor), int(self.OrigData.shape[1] / self.BlockFactor))) 
         else: 
@@ -157,7 +158,7 @@ class FilamentMap:
         mask_copy = mask_copy.astype(np.uint8)
         kernel_size = 3
         kernel = np.ones((kernel_size, kernel_size), np.uint8)
-        dilated_image = cv2.dilate(mask_copy, kernel, iterations=30)
+        dilated_image = cv2.dilate(mask_copy, kernel, iterations=40)
 
         #Dilate nan pixels--> make more concise
         copy_image = copy_image.astype(np.float32)
@@ -175,48 +176,54 @@ class FilamentMap:
 
         #make a mask based on dilated image, true value indicates pixel should be masked
         mask = np.isnan(dilated_image)
-
+        assert(not np.isnan(mask).any())
+        # plt.imshow(dilated_image, cmap = "gray")
+        # plt.show()
         return  mask
-
 
 
     def SetBkgSub(self, Sim = False):
         try:
-            mask = self._GenerateBlankRegionMask(Sim, self.BlockData)
+            mask = self.BlankRegionMask
             #copy data
             data = copy.deepcopy(self.BlockData.astype(np.float64)) #photutils should take float64
             #subtract bkg
             bkg_estimator = MedianBackground()
-            bkg = Background2D(data, box_size=round(10.*self.Scalepix/2.)*2+1, coverage_mask = mask,filter_size=(3,3), bkg_estimator=bkg_estimator) #Very different RMS with mask. Minimum is MUCH larger
+            if(self.BlockFactor == 0):
+                blockFactor = 1
+            else: 
+                blockFactor = self.BlockFactor 
+            bkg = Background2D(data, box_size=round(10.*self.Scalepix/(2.*blockFactor))*2+1, coverage_mask = mask, exclude_percentile = 10, filter_size=(3,3), bkg_estimator=bkg_estimator) #Very different RMS with mask. Minimum is MUCH larger
             data -= bkg.background #subtract bkg
             data[data < 0] = 0 #Elimate neg values. This is over estimating the background and messes up fits files
 
 
-            print(f"bkg sub max: {np.max(data)}")
             #bkg sub/RMS map
             noise = bkg.background_rms
-            print(f"noise max: {np.max(noise)}")
             noise[noise == 0] = 10**-3 #replace with small number...if noise = 0, we are in background, and output will be set to 0 anyway in two lines
+            print(f"noise min: {np.min(noise)}")
 
             divRMS = data/noise
+            print(f"bkg sub max: {np.max(divRMS)}")
             divRMS[mask] = 0 #masked regions are zero...can change to some reasonable value but doesn't really matter for SOAX
             self.BkgSubMap = divRMS
 
         except ValueError:
-            print("Error: Image is majoprity Black pixels. Invalid Data to reduce noise. Bkg Sub Map is set to Blocked Data. ")
+            print("Majrity Black pixels, error in DivRMS")
             self.BkgSubMap = self.BlockData
 
-        # Save a PNG for SOAX
-        save_png_path = fr"{self.HomeDir}\BlockedPng\{self.FitsFile}_Blocked.png"
-        pngData = self.BkgSubMap.astype(np.uint16)
-        cv2.imwrite(save_png_path, pngData)
-        
+        # plt.imshow(255*self.BkgSubMap, cmap = "gray")
+        # plt.title("bkg sub map")
+        # plt.show()
         #save as fits if Write is true
         out_path = fr"{self.HomeDir}\BkgSubDivRMS\{self.FitsFile}_divRMS.fits"
         hdu = fits.PrimaryHDU(self.BkgSubMap, header=self.BlockHeader)
         hdu.writeto(out_path, overwrite=True)
 
+
     def ScaleBkgSub(self):
+        # Normalize the image data
+        topval = self._getTopVal()  # Assuming this method returns the top value for scaling
         file = fr"{self.HomeDir}\BkgSubDivRMS\{self.FitsFile}_divRMS.fits"
         with fits.open(file, mode='update') as hdul:
             image_data = hdul[0].data  # Access the image data from the PrimaryHDU
@@ -225,8 +232,6 @@ class FilamentMap:
             if image_data is None:
                 raise ValueError(f"No image data found in FITS file: {file}")
             
-            # Normalize the image data
-            topval = self._getTopVal()  # Assuming this method returns the top value for scaling
             print(f"Top Val: {topval}")
             if topval == 0:
                 raise ValueError("Top value for scaling is zero, cannot divide by zero.")
@@ -237,14 +242,53 @@ class FilamentMap:
             
             # Optionally, save the modified FITS file (if you are not using 'update' mode)
             hdul.flush()  # Writes changes to the file
+
         # Save a PNG for SOAX
         save_png_path = fr"{self.HomeDir}\BlockedPng\{self.FitsFile}_Blocked.png"
         pngData = self.BkgSubMap.astype(np.uint16)
         cv2.imwrite(save_png_path, pngData)
+        
 
 
     def _getTopVal(self):
-        return np.max(self.BkgSubMap)
+        """
+        Navigates to the designated directory, opens every FITS file,
+        finds the 99th percentile in each FITS file, and prints the file
+        containing the largest 99th percentile. Returns the largest value.
+        """
+        # Specify the directory
+        dir = fr"{self.HomeDir}\BkgSubDivRMS"
+
+        # Initialize variables to track the largest 99th percentile and corresponding file
+        max_percentile = -np.inf
+        max_file = None
+
+        # Navigate through files in the directory
+        for file in os.listdir(dir):
+            if file.endswith('.fits'):  # Process only FITS files
+                file_path = os.path.join(dir, file)
+                
+                # Open the FITS file
+                with fits.open(file_path) as hdu:
+                    data = hdu[0].data  # Assuming data is in the primary HDU
+                    
+                    if data is not None:  # Ensure the FITS file contains data
+                        # Compute the 99th percentile
+                        percentile_99 = np.nanpercentile(data, 99)
+                        
+                        # Update if this file has the largest 99th percentile so far
+                        if percentile_99 > max_percentile:
+                            max_percentile = percentile_99
+                            max_file = file
+
+        # Print the file with the largest 99th percentile
+        if max_file:
+            print(f"File with largest 99th percentile: {max_file} ({max_percentile})")
+        else:
+            print("No FITS files found or valid data.")
+
+        # Return the largest 99th percentile
+        return max_percentile
 
     def SetBlockData(self, Write = False):
         if(self.BlockFactor !=0):
@@ -253,17 +297,23 @@ class FilamentMap:
             self.BlockHeader['CDELT2'] = new_pixel_scale
 
             # Apply scale factor and adjust for 0.5-pixel offset
-            self.BlockHeader['CRPIX1'] = (self.OrigHeader['CRPIX1'] / self.BlockFactor) + .4687 #shift for some reason?
-            self.BlockHeader['CRPIX2'] = (self.OrigHeader['CRPIX2'] / self.BlockFactor) + .4867 #shift for some reason?
+            self.BlockHeader['CRPIX1'] = (self.OrigHeader['CRPIX1'] / self.BlockFactor)
+            self.BlockHeader['CRPIX2'] = (self.OrigHeader['CRPIX2'] / self.BlockFactor) 
 
             # Reproject data
             reprojected_data, _ = reproject_exact((self.OrigData, self.OrigHeader), self.BlockHeader, shape_out=(np.shape(self.BlockData)))
-
+            self.BlankRegionMask, _ = reproject_exact((self.BlankRegionMask, self.OrigHeader), self.BlockHeader.copy(), shape_out=(np.shape(self.BlockData)))
             # Crop NaN border (if necessary)
             self.BlockData = self._crop_nan_border(reprojected_data, (np.shape(self.BlockData)))
+            self.BlankRegionMask = self._crop_nan_border(self.BlankRegionMask, (np.shape(self.BlockData)))
+            assert(np.shape(self.BlankRegionMask)==np.shape(self.BlockData))
+            self.BlankRegionMask = self.BlankRegionMask == 1 #boolean mask, True indicates pixels to mask
         else:
             self.BlockData = self.OrigData
 
+        # plt.imshow(self.BlankRegionMask, cmap = "gray")
+        # plt.title("mask")
+        # plt.show()
         assert(np.sum(self.BlockData) !=0)
         print(f"Block Max: {np.max(self.BlockData)}")
 
@@ -283,10 +333,8 @@ class FilamentMap:
         # Find the rows and columns with at least one non-NaN value
         non_nan_rows = np.where(mask.any(axis=1))[0]
         non_nan_cols = np.where(mask.any(axis=0))[0]
-        
         # Use the min and max of these indices to slice the image
-        cropped_image = image[non_nan_rows.min():non_nan_rows.max() + 1, 
-                            non_nan_cols.min():non_nan_cols.max() + 1]
+        cropped_image = image[non_nan_rows.min():non_nan_rows.max() + 1, non_nan_cols.min():non_nan_cols.max() + 1]
         
         # Get the current shape of the cropped image
         current_shape = cropped_image.shape
