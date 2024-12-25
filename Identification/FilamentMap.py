@@ -36,7 +36,6 @@ class FilamentMap:
             OrigData = np.nan_to_num(OrigData, nan=0.0)  # Replace NaNs with 0
             OrigHeader = hdul[0].header
         self.Galaxy = Galaxy
-        self.IntensityMap = np.zeros_like(OrigData)
         self.ProbabilityMap = np.zeros_like(OrigData)
         self.BkgSubMap = np.zeros_like(OrigData)
         Scale = self._getScale(FitsFile)
@@ -55,6 +54,8 @@ class FilamentMap:
             self.BlockData = np.zeros((int(self.OrigData.shape[0] / self.BlockFactor), int(self.OrigData.shape[1] / self.BlockFactor))) 
         else: 
             self.BlockData = np.zeros_like(self.OrigData)
+        self.IntensityMap = np.zeros_like(self.BlockData)
+
 
 
 
@@ -225,29 +226,27 @@ class FilamentMap:
         # Normalize the image data
         topval = self._getTopVal()  # Assuming this method returns the top value for scaling
         file = fr"{self.HomeDir}\BkgSubDivRMS\{self.FitsFile}_divRMS.fits"
-        with fits.open(file, mode='update') as hdul:
+        with fits.open(file) as hdul:
             image_data = hdul[0].data  # Access the image data from the PrimaryHDU
 
             # Ensure the data is a NumPy array
             if image_data is None:
                 raise ValueError(f"No image data found in FITS file: {file}")
             
-            print(f"Top Val: {topval}")
-            if topval == 0:
-                raise ValueError("Top value for scaling is zero, cannot divide by zero.")
-            
-            # Scale the image data
-            hdul[0].data = np.array(image_data) * 65535 / topval
-            self.BkgSubMap = hdul[0].data
-            
-            # Optionally, save the modified FITS file (if you are not using 'update' mode)
-            hdul.flush()  # Writes changes to the file
+        print(f"Top Val: {topval}")
+        if topval == 0:
+            raise ValueError("Top value for scaling is zero, cannot divide by zero.")
+        
+        # Scale the image data
+        self.BkgSubMap = np.array(image_data) * 65535 / topval
 
         # Save a PNG for SOAX
         save_png_path = fr"{self.HomeDir}\BlockedPng\{self.FitsFile}_Blocked.png"
         pngData = self.BkgSubMap.astype(np.uint16)
+        # plt.imshow(pngData, cmap = "gray")
+        # plt.title(f"image data after scaling at {self.Scale}")
+        # plt.show()
         cv2.imwrite(save_png_path, pngData)
-        
 
 
     def _getTopVal(self):
@@ -274,7 +273,7 @@ class FilamentMap:
                     
                     if data is not None:  # Ensure the FITS file contains data
                         # Compute the 99th percentile
-                        percentile_99 = np.nanpercentile(data, 99)
+                        percentile_99 = np.nanpercentile(data, 99.99)
                         
                         # Update if this file has the largest 99th percentile so far
                         if percentile_99 > max_percentile:
@@ -374,7 +373,7 @@ class FilamentMap:
             assert( os.path.isfile(param_text))
             assert(os.path.isfile(input_image))
             print("starting Soax")
-            cmdString = f'"{batch}" soax -i "{input_image}" -p "{param_text}" -s "{output_dir}" --ridge 0.02 0.0075 0.06 --stretch 1.5 0.5 3' #can update ridge and stretch later
+            cmdString = f'"{batch}" soax -i "{input_image}" -p "{param_text}" -s "{output_dir}" --ridge 0.02375 0.0075 0.055 --stretch 1.75 0.5 2.5' #can update ridge and stretch later
             subprocess.run(cmdString, shell=True)
             print(f"Complete Soax on {self.FitsFile}, converting set to FITS")
             self._ConvertSoaxToFits(output_dir, base_param_file)
@@ -463,6 +462,9 @@ class FilamentMap:
             final_image+=new_image
 
         # Save the output image as a FITS file
+        # plt.imshow(final_image, cmap = "gray")
+        # plt.title("In Interpolation: Final Image")
+        # plt.show()
         hdu = fits.PrimaryHDU(final_image, header = self.OrigHeader)
         hdu.writeto(path, overwrite=True)
 
@@ -476,7 +478,7 @@ class FilamentMap:
             x1, y1 = (points[i][0], points[i][1])
             x2, y2 = (points[i+1][0], points[i+1][1])
             cv2.line(output_array, (x1, y1), (x2, y2), 1, thickness= 1)
-            cv2.circle(output_array, (x1, y1), 1, 1, thickness= 1)  # Filled circle
+            # cv2.circle(output_array, (x1, y1), 1, 1, thickness= 1)  # Filled circle
         return output_array
     
     def CreateComposite(self, base_param_file):
@@ -534,19 +536,29 @@ class FilamentMap:
         hdu.writeto(output_fits_path, overwrite=True)
         self.Composite = composite_data
         self.ProbabilityMap = composite_data
+        # plt.imshow(composite_data, cmap = "gray")
+        # plt.title("Original Composite Image")
+        # plt.show()
         print(f"Composite image saved as FITS: {output_fits_path}")
 
     def SetIntensityMap(self, Orig = True):
         if(Orig):
             self.IntensityMap[self.Composite !=0] = 255*self.OrigData[self.Composite!=0]
         else: 
-            self.IntensityMap[self.Composite !=0] = self.BkgSubMap[self.Composite!=0]
+            temp, _ = reproject_exact((self.ProbabilityMap, self.OrigHeader), self.BlockHeader.copy(), shape_out=(np.shape(self.BlockData)))
+            temp = self._crop_nan_border(temp, (np.shape(self.BlockData)))
+            self.IntensityMap[temp !=0] = self.BkgSubMap[temp!=0]
 
     def DisplayProbIntensityPlot(self, galaxy_dir, Orig=True, Write=False, verbose=False):
+        if Orig:
+            probability_flat = self.ProbabilityMap.flatten()
+        else: 
+            temp, _ = reproject_exact((self.ProbabilityMap, self.OrigHeader), self.BlockHeader.copy(), shape_out=(np.shape(self.BlockData)))
+            temp = self._crop_nan_border(temp, (np.shape(self.BlockData)))
+            probability_flat = temp.flatten()
 
         # Flatten the images
-        probability_flat = self.ProbabilityMap.flatten()
-        probability_flat = np.round(100 / 255 * probability_flat).astype(int)
+        probability_flat = np.round(100 / np.max(probability_flat) * probability_flat).astype(int)
         intensity_flat = self.IntensityMap.flatten()
 
         # Remove entries where the probability equals zero
@@ -554,11 +566,12 @@ class FilamentMap:
         probability_flat = probability_flat[valid_indices]
         intensity_flat = intensity_flat[valid_indices]
 
-        # Identify unique probabilities
-        unique_probabilities = np.unique(probability_flat)
+        # Group probabilities into 5% bins
+        binned_probabilities = (probability_flat // 5) * 5  # Group into bins of 5%
+        unique_bins = np.unique(binned_probabilities)
 
-        # Group intensity values by probability
-        grouped_intensities = [intensity_flat[probability_flat == prob] for prob in unique_probabilities]
+        # Group intensity values by probability bin
+        grouped_intensities = [intensity_flat[binned_probabilities == prob] for prob in unique_bins]
 
         # Count values in each group
         counts = [len(group) for group in grouped_intensities]
@@ -569,7 +582,7 @@ class FilamentMap:
 
         # Create box plots
         plt.figure(figsize=(10, 6))
-        plt.boxplot(grouped_intensities, labels=unique_probabilities, vert=True, patch_artist=True)
+        plt.boxplot(grouped_intensities, labels=unique_bins, vert=True, patch_artist=True)
 
         # Add count annotations below x-axis labels
         ylim = plt.ylim()
@@ -582,12 +595,12 @@ class FilamentMap:
         plt.ylim(y_min - 0.2 * (ylim[1] - ylim[0]), ylim[1])
 
         # Customize plot
-        plt.xlabel('Probability (%) from Soax')
+        plt.xlabel('Probability (%) grouped by 5% bins')
         if Orig:
             plt.ylabel('Intensity value in original data')
         else:
             plt.ylabel('Intensity value in bkg subtracted data')
-        plt.title(f'Box Plot of Intensity Values at Each Probability for {self.Galaxy} at {self.Scale} for {total_elements} pixels')
+        plt.title(f'Box Plot of Intensity Values at Each Probability Bin for {self.Galaxy} at {self.Scale} for {total_elements} pixels')
         plt.xticks(rotation=45)
         plt.grid(axis='y', linestyle='--', alpha=0.7)
 
@@ -599,9 +612,7 @@ class FilamentMap:
             plt.show()
 
 
-
-
-    def BlurComposite(self, set_blur_as_prob = True):
+    def BlurComposite(self, set_blur_as_prob = True, Write = True):
         struct_width = self.Scale.replace('pc',"")
         struct_width = int(struct_width)
         # Convert structure width from parsecs to pixels
@@ -616,11 +627,23 @@ class FilamentMap:
         self.Composite = blurred_image
         if(set_blur_as_prob):
             self.ProbabilityMap = blurred_image
+        # plt.imshow( self.Composite, cmap = "gray")
+        # plt.title("Blurred Composite Image")
+        # plt.show()
+        if(Write):
+            output_directory = fr"{self.HomeDir}\Composite"
+            output_name = fr"{self.FitsFile}_CompositeBlur"
+            output_fits_path = os.path.join(output_directory, output_name + '.fits')
+            hdu = fits.PrimaryHDU(data=blurred_image, header=self.OrigHeader)
+            hdu.writeto(output_fits_path, overwrite=True)
 
     def ReHashComposite(self, ProbabilityThreshPercentile, minPixBoxSize):
         print(f"Blur Max: {np.max(self.Composite)}")
+        # plt.imshow( self.Composite, cmap = "gray")
+        # plt.title("Blurred Composite Image before threshold")
+        # plt.show()    
         ProbabilityThresh = np.max(self.Composite)*ProbabilityThreshPercentile
-        ret, threshComposite = cv2.threshold(self.Composite,ProbabilityThresh,255, cv2.THRESH_BINARY)
+        ret, threshComposite = cv2.threshold(self.Composite, ProbabilityThresh, 255, cv2.THRESH_BINARY)
         skelComposite = skeletonize(threshComposite)
         junctions = AF.getSkeletonIntersection(np.array(255*skelComposite))
         print(f"Number of junctions: {len(junctions)}")
@@ -638,7 +661,7 @@ class FilamentMap:
                 for y in range(height):
                     img[top:top+height, left:left+width] = 0
 
-        self.Composite = img
+        # self.Composite = img
 
         output_directory = fr"{self.HomeDir}\Composite"
         output_name = fr"{self.FitsFile}_Composite_{ProbabilityThreshPercentile}"
