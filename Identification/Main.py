@@ -15,17 +15,19 @@ if __name__ == "__main__":
     if(not decomposition_exists):
         Modified_Constrained_Diffusion.decompose(galaxy_dir)
     FilamentMapList = mainFuncs.setUp(galaxy_dir)
-    # mainFuncs.CreateSNRPlot(FilamentMapList, galaxy_dir, Write = True, verbose = False)
+    mainFuncs.CreateSNRPlot(FilamentMapList, galaxy_dir, Write = True, verbose = False)
 
     #iterate through JWST files
     for myFilMap in FilamentMapList:
         #Run Everything to get Composite
         myFilMap.ScaleBkgSub()
-        # myFilMap.RunSoax()
-        myFilMap.CreateComposite("best_param1") #either this or run soax
+        myFilMap.RunSoax()
+        # myFilMap.CreateComposite("best_param1") #either this or run soax
         myFilMap.BlurComposite(set_blur_as_prob = True)
         myFilMap.SetIntensityMap(Orig = False)
         myFilMap.DisplayProbIntensityPlot(galaxy_dir, Orig = False, Write = True, verbose = False)
-        myFilMap.ReHashComposite(ProbabilityThreshPercentile = .33, minPixBoxSize = 75)
+        myFilMap.ReHashComposite(ProbabilityThreshPercentile = .33, minPixBoxSize = 100) #formerly 75 increased to 100 for sim
+
+        #comments: Parameters take way too much structure for sim, need to increase min intensity
 
 

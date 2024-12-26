@@ -49,7 +49,11 @@ class FilamentMap:
         FitsFile = os.path.splitext(FitsFile)[0]  # removes the .fits extension
         self.FitsFile = FitsFile
         self.BlockFactor = self._getBlockFactor()
-        self.BlankRegionMask = self._GenerateBlankRegionMask(Sim = False, data_to_mask = OrigData)
+        if("Sim" in FitsFile):
+            Sim = True
+        else: 
+            Sim = False
+        self.BlankRegionMask = self._GenerateBlankRegionMask(Sim, data_to_mask = OrigData)
         if(self.BlockFactor != 0):
             self.BlockData = np.zeros((int(self.OrigData.shape[0] / self.BlockFactor), int(self.OrigData.shape[1] / self.BlockFactor))) 
         else: 
@@ -183,7 +187,7 @@ class FilamentMap:
         return  mask
 
 
-    def SetBkgSub(self, Sim = False):
+    def SetBkgSub(self):
         try:
             mask = self.BlankRegionMask
             #copy data
