@@ -20,13 +20,15 @@ if __name__ == "__main__":
     #iterate through JWST files
     for myFilMap in FilamentMapList:
         #Run Everything to get Composite
-        myFilMap.ScaleBkgSub()
-        myFilMap.RunSoax()
-        # myFilMap.CreateComposite("best_param1") #either this or run soax
+        # myFilMap.ScaleBkgSub()
+        # myFilMap.RunSoax()
+        myFilMap.CreateComposite("best_param1") #either this or run soax
         myFilMap.BlurComposite(set_blur_as_prob = True)
-        myFilMap.SetIntensityMap(Orig = False)
-        myFilMap.DisplayProbIntensityPlot(galaxy_dir, Orig = False, Write = True, verbose = False)
-        myFilMap.ReHashComposite(ProbabilityThreshPercentile = .33, minPixBoxSize = 100) #formerly 75 increased to 100 for sim
+        # myFilMap.SetIntensityMap(Orig = False)
+        # myFilMap.DisplayProbIntensityPlot(galaxy_dir, Orig = False, Write = True, verbose = False)
+        # myFilMap.ReHashComposite(ProbabilityThreshPercentile = .33, minPixBoxSize = 75) #formerly 75 increased to 100 for sim
+        # myFilMap.ReHashComposite(ProbabilityThreshPercentile = .075, minPixBoxSize = 75) #formerly 75 increased to 100 for sim
+        myFilMap.ReHashComposite(ProbabilityThreshPercentile = .15, minPixBoxSize = 75) #formerly 75 increased to 100 for sim
 
         #comments: Parameters take way too much structure for sim, need to increase min intensity
 
