@@ -196,7 +196,7 @@ for inputpath in os.listdir(filedir):
 
         # Pass the modified image to your function
         result_in, residual_in, kernel_sizes = cddss.constrained_diffusion_decomposition_specificscales(
-            image_in, pixscales, pixscales_lo, pixscales_hi, e_rel=3.e-2
+            image_in, pixscales, pixscales_lo, pixscales_hi, e_rel=3.e-3
         )
         print(kernel_sizes)
 
@@ -222,6 +222,7 @@ for inputpath in os.listdir(filedir):
                 image_now = hdu[extnum].data
                 header_now = hdu[extnum].header
             hduout = fits.PrimaryHDU(data=a * np.arcsinh(image_now / a), header=header_now)
+            print(f"Saving to {outfilename_prefix}")
             hduout.writeto(
                 outfilename_prefix + '_CDDss' + str(pcscales[idx]).rjust(4, '0') + 'pc_arcsinh0p1.fits', overwrite=True
             )
