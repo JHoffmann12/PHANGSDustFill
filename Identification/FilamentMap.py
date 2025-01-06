@@ -53,15 +53,19 @@ class FilamentMap:
             Sim = True
         else: 
             Sim = False
-        self.BlankRegionMask = self._GenerateBlankRegionMask(Sim, data_to_mask = OrigData)
+        self.BlankRegionMask = self._GenerateBlankRegionMask(Sim)
         if(self.BlockFactor != 0):
             self.BlockData = np.zeros((int(self.OrigData.shape[0] / self.BlockFactor), int(self.OrigData.shape[1] / self.BlockFactor))) 
         else: 
             self.BlockData = np.zeros_like(self.OrigData)
         self.IntensityMap = np.zeros_like(self.BlockData)
+        self.NoiseMap = np.zeros_like(self.BlockData)
 
 
 
+    def setBlockFactor(self, bf):
+        self.BlockFactor = bf
+    
 
     def _getScale(self, fits_file):
         if '128pc' in fits_file:
@@ -143,27 +147,53 @@ class FilamentMap:
         print(f"Block Factor: {block_factor}")
 
         return block_factor
+    
+    def getSmallestScaleData(self):
+        dir_path = fr"{self.HomeDir}"
+        pc_values = []
+        fits_files = []
+
+        # Search for fits files with parsec values
+        for file in os.listdir(dir_path):
+            if file.endswith('.fits'):
+                match = re.search(r'(\d+)pc', file)
+                if match:
+                    pc_value = int(match.group(1))
+                    pc_values.append(pc_value)
+                    fits_files.append((pc_value, file))
+        
+        # Find the file with the smallest parsec value
+        if pc_values:
+            smallest_pc_file = min(fits_files, key=lambda x: x[0])[1]
+            fits_path = os.path.join(dir_path, smallest_pc_file)
+            
+            # Open the fits file and return the data
+            with fits.open(fits_path) as hdul:
+                data = hdul[0].data
+                return data
+        else:
+            raise FileNotFoundError("No FITS files with parsec values found.")
 
 
-    def _GenerateBlankRegionMask(self, Sim, data_to_mask): # "_" indicates a protected method
+    def _GenerateBlankRegionMask(self, Sim): # "_" indicates a protected method
+        data_to_mask = self.OrigData
+        # data_to_mask = self.getSmallestScaleData()
         copy_image = copy.deepcopy(data_to_mask)
         #set thresholding for masking blank regions
         if(Sim):
             threshold = .05 # for simulated image
-            iters = 6 # for simulated image
-            kernel_size = 9 #for simulated image
+            iters = 10
         else: 
-            threshold = .001 # for real image
-            iters = 6 #for real image
-            kernel_size = 11
+            threshold = 10**-20 # for real image
+            iters = 10 #6 before *************
 
         #Dilate White Pixels-->make more concise
         mask_copy = copy.deepcopy(copy_image)
         mask_copy[mask_copy > threshold] = 255
         mask_copy = mask_copy.astype(np.uint8)
-        kernel_size = 3
+        kernel_size = 3 
         kernel = np.ones((kernel_size, kernel_size), np.uint8)
-        dilated_image = cv2.dilate(mask_copy, kernel, iterations=40)
+        dilated_image = cv2.dilate(mask_copy, kernel, iterations= 30) #40 before ************
 
         #Dilate nan pixels--> make more concise
         copy_image = copy_image.astype(np.float32)
@@ -172,7 +202,7 @@ class FilamentMap:
         binary_mask = np.zeros_like(copy_image, dtype=np.uint8)
         binary_mask[mask] = 255
         binary_mask[~mask] = 0
-        kernel_size = 11
+        kernel_size = 15 #11 before ***********
         kernel = np.ones((kernel_size, kernel_size), np.uint8)
         dilated_mask = cv2.dilate(binary_mask, kernel, iterations=iters)
 
@@ -182,7 +212,11 @@ class FilamentMap:
         #make a mask based on dilated image, true value indicates pixel should be masked
         mask = np.isnan(dilated_image)
         assert(not np.isnan(mask).any())
-        # plt.imshow(dilated_image, cmap = "gray")
+        plt.imshow(np.uint8(mask) * 255)
+        plt.title(f"Mask of {self.Galaxy} at {self.Scale}")
+        galaxy_dir = r"C:\Users\HP\Documents\JHU_Academics\Research\Soax_results_blocking_V2"
+        plt.savefig(f"{galaxy_dir}\Figures\Mask_{self.Galaxy}_{self.Scale}.png")
+        plt.close()
         # plt.show()
         return  mask
 
@@ -202,22 +236,21 @@ class FilamentMap:
             data -= bkg.background #subtract bkg
             data[data < 0] = 0 #Elimate neg values. This is over estimating the background and messes up fits files
 
-
             #bkg sub/RMS map
             noise = bkg.background_rms
-            noise[noise == 0] = 10**-3 #replace with small number...if noise = 0, we are in background, and output will be set to 0 anyway in two lines
+            noise[noise == 0] = 1 #replace unphysical and absent noise with 1 just to avoid division by zero
             print(f"noise min: {np.min(noise)}")
 
             divRMS = data/noise
             print(f"bkg sub max: {np.max(divRMS)}")
-            divRMS[mask] = 0 #masked regions are zero...can change to some reasonable value but doesn't really matter for SOAX
+            divRMS[(mask == 1) | (noise == 0)] = 0 #masked regions are zero...can change to some reasonable value but doesn't really matter for SOAX
             self.BkgSubMap = divRMS
-
+            self.NoiseMap = noise
         except ValueError:
             print("Majrity Black pixels, error in DivRMS")
             self.BkgSubMap = self.BlockData
 
-        # plt.imshow(255*self.BkgSubMap, cmap = "gray")
+        # plt.imshow(self.BkgSubMap)
         # plt.title("bkg sub map")
         # plt.show()
         #save as fits if Write is true
@@ -466,7 +499,8 @@ class FilamentMap:
             final_image+=new_image
 
         # Save the output image as a FITS file
-        # plt.imshow(final_image, cmap = "gray")
+        # plt.imshow(255*final_image)
+        # plt.grid(False)
         # plt.title("In Interpolation: Final Image")
         # plt.show()
         hdu = fits.PrimaryHDU(final_image, header = self.OrigHeader)
@@ -504,6 +538,9 @@ class FilamentMap:
         for file in fits_files:
             with fits.open(file) as hdul:
                 image_data = hdul[0].data
+                # plt.imshow(image_data)
+                # plt.title("used for composite")
+                # plt.show()
                 if image_data is not None:
                     # Binary presence indicator (values > 0 set to 1, others set to 0)
                     images.append((image_data > 0).astype(np.uint8))
@@ -540,8 +577,9 @@ class FilamentMap:
         hdu.writeto(output_fits_path, overwrite=True)
         self.Composite = composite_data
         self.ProbabilityMap = composite_data
-        # plt.imshow(composite_data, cmap = "gray")
+        # plt.imshow(composite_data)
         # plt.title("Original Composite Image")
+        # plt.grid(False)
         # plt.show()
         print(f"Composite image saved as FITS: {output_fits_path}")
 
@@ -606,7 +644,7 @@ class FilamentMap:
             plt.ylabel('Intensity value in bkg subtracted data')
         plt.title(f'Box Plot of Intensity Values at Each Probability Bin for {self.Galaxy} at {self.Scale} for {total_elements} pixels')
         plt.xticks(rotation=45)
-        plt.grid(axis='y', linestyle='--', alpha=0.7)
+        # plt.grid(axis='y', linestyle='--', alpha=0.7)
 
         # Save or display the plot
         plt.tight_layout()
@@ -631,7 +669,7 @@ class FilamentMap:
         self.Composite = blurred_image
         if(set_blur_as_prob):
             self.ProbabilityMap = blurred_image
-        # plt.imshow( self.Composite, cmap = "gray")
+        # plt.imshow( self.Composite)
         # plt.title("Blurred Composite Image")
         # plt.show()
         if(Write):
@@ -665,8 +703,10 @@ class FilamentMap:
                 for y in range(height):
                     img[top:top+height, left:left+width] = 0
 
-        # self.Composite = img
-
+        self.Composite = img
+        # plt.imshow( self.Composite)
+        # plt.title("Blurred Composite Image before threshold")
+        # plt.show()    
         output_directory = fr"{self.HomeDir}\Composite"
         output_name = fr"{self.FitsFile}_Composite_{ProbabilityThreshPercentile}"
         output_fits_path = os.path.join(output_directory, output_name + '.fits')
