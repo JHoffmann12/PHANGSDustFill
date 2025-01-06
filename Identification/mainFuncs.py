@@ -40,7 +40,7 @@ def setUp(galaxy_dir): #Assumes no data is a simulation for now
         galaxy_path = os.path.join(galaxy_dir, galaxy_folder)  # Get the full path
         if not os.path.isdir(galaxy_path):  # Skip if it's not a directory
             continue
-        if(galaxy_folder == "GalaxySim" and galaxy_folder != 'OriginalMiriImages'): #remove later
+        if(galaxy_folder != "GalaxySim" and galaxy_folder != 'OriginalMiriImages'): #remove later
             print(galaxy_folder)
             Galaxy = galaxy_folder
             galaxy_folder = os.path.join(galaxy_dir, galaxy_folder)
@@ -52,6 +52,7 @@ def setUp(galaxy_dir): #Assumes no data is a simulation for now
                     distance_mpc = getDistance(Galaxy, fits_file, dist_table_path)
                     ScalePix = .53328 * distance_mpc
                     MyFilMap = FilamentMap.FilamentMap(ScalePix, galaxy_folder, fits_file, Galaxy) #change name later to be specific to the image
+                    # MyFilMap.setBlockFactor(4)
                     MyFilMap.SetBlockData(Write = True)
                     #get BkgSub Image
                     MyFilMap.SetBkgSub()
@@ -59,16 +60,16 @@ def setUp(galaxy_dir): #Assumes no data is a simulation for now
                     FilamentMapList.append(MyFilMap)
     return FilamentMapList
 
-def CreateSNRPlot(FilamentMapList, galaxy_dir, Write = False, verbose = False):
+def CreateSNRPlot(FilamentMapList, galaxy_dir, Write = False, verbose = False, noisePlot = False):
 
     galaxy_dict = {}
-
     # Iterate over each object and group them
     for myFilMap in FilamentMapList:
         galaxy = myFilMap.getGalaxy()
         if galaxy not in galaxy_dict:
             galaxy_dict[galaxy] = []
         SNRMap = myFilMap.getBkgSubMap()
+        #to add to plot:
         scale = myFilMap.getScale()
         scale = scale.replace('pc', "")
         scale = int(scale)
@@ -81,7 +82,7 @@ def CreateSNRPlot(FilamentMapList, galaxy_dir, Write = False, verbose = False):
         plt.scatter(scales, percentiles, label=f"Galaxy: {galaxy}")
         plt.xlabel("Scale (pc)")
         plt.ylabel("SNR 99 percentile")
-        plt.title(f"SNR Plot for Galaxy: {galaxy} without normalization")
+        plt.title(f"SNR Plot for Galaxy: {galaxy} without normalization and using unique masks")
         plt.legend()
         plt.grid(True)
 
@@ -89,3 +90,32 @@ def CreateSNRPlot(FilamentMapList, galaxy_dir, Write = False, verbose = False):
             plt.savefig(f"{galaxy_dir}\Figures\SNRPlot_{galaxy}.png")
         if(verbose):
             plt.show()
+
+    if (noisePlot):
+        galaxy_dict = {}
+        # Iterate over each object and group them
+        for myFilMap in FilamentMapList:
+            galaxy = myFilMap.getGalaxy()
+            if galaxy not in galaxy_dict:
+                galaxy_dict[galaxy] = []
+            #to add to plot:
+            scale = myFilMap.getScale()
+            scale = scale.replace('pc', "")
+            scale = int(scale)
+            galaxy_dict[galaxy].append((scale, np.percentile(myFilMap.NoiseMap, 3))) 
+
+        # Plotting scatter plots for each galaxy
+        for galaxy, data in galaxy_dict.items():
+            scales, percentiles = zip(*data)  # Unpack scales and percentiles
+            plt.figure()
+            plt.scatter(scales, percentiles, label=f"Galaxy: {galaxy}")
+            plt.xlabel("Scale (pc)")
+            plt.ylabel("Lowest 3 percentile Noise")
+            plt.title(f"Noise Plot for Galaxy: {galaxy} using unique masks")
+            plt.legend()
+            plt.grid(True)
+
+            if Write:
+                plt.savefig(f"{galaxy_dir}\Figures\PNoisePlot_{galaxy}.png")
+            if(verbose):
+                plt.show()
