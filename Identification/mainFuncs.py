@@ -1,10 +1,18 @@
 import os
 import FilamentMap
 import numpy as np 
+import matplotlib
+matplotlib.use('Agg')  # Non-GUI backend for thread safety
 import matplotlib.pyplot as plt
 from astropy.table import Table
 import re
+from astropy.io import fits
+from astropy.coordinates import EarthLocation
+import astropy.units as u  # Add this line to import the units
 
+
+def fixFits(fits_path):
+    return
 
 def getDistance(Galaxy, fits_file, dist_table_path):
     dist_table = Table.read(dist_table_path, format='ascii')
@@ -40,13 +48,14 @@ def setUp(galaxy_dir): #Assumes no data is a simulation for now
         galaxy_path = os.path.join(galaxy_dir, galaxy_folder)  # Get the full path
         if not os.path.isdir(galaxy_path):  # Skip if it's not a directory
             continue
-        if(galaxy_folder != "GalaxySim" and galaxy_folder != 'OriginalMiriImages'): #remove later
+        if(galaxy_folder == "ngc1433" and galaxy_folder != 'OriginalMiriImages'): #remove later
             print(galaxy_folder)
             Galaxy = galaxy_folder
             galaxy_folder = os.path.join(galaxy_dir, galaxy_folder)
             for fits_file in os.listdir(galaxy_folder):
                 if(fits_file.endswith(".fits")): 
                     #Make object
+                    # fixFits(os.path.join(galaxy_folder, fits_file)) #avoids astropy warnings by filling header content with B.S. 
                     print(f"Setting Up: {fits_file}")
                     dist_table_path = os.path.join(galaxy_dir, "DistanceTable.txt")
                     distance_mpc = getDistance(Galaxy, fits_file, dist_table_path)
