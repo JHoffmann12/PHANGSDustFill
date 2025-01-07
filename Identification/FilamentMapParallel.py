@@ -1,8 +1,6 @@
 import copy
 import numpy as np
 import cv2
-import matplotlib
-matplotlib.use('Agg')  # Non-GUI backend for thread safety
 import matplotlib.pyplot as plt
 from skimage.morphology import skeletonize
 import matplotlib.pyplot as plt
@@ -32,7 +30,6 @@ import threading
 import sys 
 import timeit 
 from multiprocessing import Process
-
 
 class FilamentMap:
 
@@ -407,31 +404,30 @@ class FilamentMap:
     def RunSoaxThreads(self):
         stretch_start = 1.75
         stretch_stop = 2.5
-        print('Starting Threads and Suppressing SOAX Output')
+        print('Starting Threads and Suppressing Output')
         start = time.time()
+        sys.stdout = open(os.devnull, 'w')  # Redirect stdout to devnull
+        sys.stderr = open(os.devnull, 'w')  # Redirect stderr to devnull
         
-        threads = []
+        processes = []
         for i in range(5):
-            t = threading.Thread(target=self.RunSoax, kwargs={
-                "ridge_start": .02375 + i*0.0075, 
-                "ridge_stop": .03 + i*0.0075, 
-                "stretch_start": stretch_start, 
-                "stretch_stop": stretch_stop
-            })
-            threads.append(t)
-            t.start()
+            p = Process(target=self.RunSoax, kwargs={"ridge_start": .02375 + i*0.005, "ridge_stop": .03 + i*0.005, "stretch_start": stretch_start, "stretch_stop": stretch_stop})
+            processes.append(p)
+            p.start()
 
-        for t in threads:
-            t.join()
-          
+        for p in processes:
+            p.join()
+        
+        sys.stdout = sys.__stdout__  # Restore stdout
         print("Threads done and terminal restored")
         end = time.time()
         elapsed_time = end - start
+        # Convert elapsed time to hh:mm:ss format
         hours = int(elapsed_time // 3600)
         minutes = int((elapsed_time % 3600) // 60)
         seconds = int(elapsed_time % 60)
         
-        print(f'Elapsed time to run soax with 5 threads is: {hours:02d}:{minutes:02d}:{seconds:02d}')
+        print(f'Elapsed time to run soax with 5 processes is: {hours:02d}:{minutes:02d}:{seconds:02d}')
 
     def RunSoax(self, ridge_start, ridge_stop, stretch_start, stretch_stop):
         input_image = fr"{self.HomeDir}\BlockedPng\{self.FitsFile}_Blocked.png"
@@ -441,7 +437,7 @@ class FilamentMap:
             param_text = os.path.join(parameter_folder, parameter_file)
             base_param_file = os.path.splitext(parameter_file)[0]  # removes the .txt extension
             output_dir = fr"{self.HomeDir}\SOAXOutput\{self.Scale}\{base_param_file}"
-            # print(f"out {output_dir}")
+            print(f"out {output_dir}")
             assert(os.path.isdir(output_dir))
             assert( os.path.isfile(param_text))
             assert(os.path.isfile(input_image))
@@ -451,9 +447,8 @@ class FilamentMap:
             with open(os.devnull, 'w') as devnull:
                 subprocess.run(cmdString, shell=True, stdout=devnull, stderr=devnull) #supress output from threads because its garbage
 
-            # print(f"Complete Soax on {self.FitsFile}, converting set to FITS")
+            print(f"Complete Soax on {self.FitsFile}, converting set to FITS")
             self._ConvertSoaxToFits(output_dir, base_param_file, ridge_start) #ridge_start can be used to specify the two SOAX files created by one process
-            print("Soax converted to Fits, Success!")
             # self.CreateComposite(base_param_file)
 
     def _ConvertSoaxToFits(self, outputDir, base_param_file, ridge_start): #contains ridge_start tag
@@ -468,7 +463,7 @@ class FilamentMap:
     def _txtToFilaments(self, result_file, interpolate_path):
         expected_header = "s p x y z fg_int bg_int"
 
-        print(f' Begenning txt to Filament conversion {result_file}')
+        print(f' working on {result_file}')
         assert(os.path.isfile(result_file))
         
         # Read the content of the input file
@@ -519,7 +514,6 @@ class FilamentMap:
 
 
     def _Interpolate(self, dict, path):
-        # print("Interpolating now!")
         wcs_orig = WCS(self.OrigHeader)
         wcs_blocked = WCS(self.BlockHeader)
         final_image = np.zeros_like(self.OrigData)
@@ -544,12 +538,11 @@ class FilamentMap:
         # plt.grid(False)
         # plt.title("In Interpolation: Final Image")
         # plt.show()
-        # print("Interpolation Complete!")
         hdu = fits.PrimaryHDU(final_image, header = self.OrigHeader)
         hdu.writeto(path, overwrite=True)
 
+
     def _connect_points_sequential(self, points, image_shape):
-        # print("Connecting points now!")
         points = [(int(x), int(y), i) for x, y,i in points]
         output_array = np.zeros(image_shape, dtype=np.uint8)
 
@@ -559,7 +552,6 @@ class FilamentMap:
             x2, y2 = (points[i+1][0], points[i+1][1])
             cv2.line(output_array, (x1, y1), (x2, y2), 1, thickness= 1)
             # cv2.circle(output_array, (x1, y1), 1, 1, thickness= 1)  # Filled circle
-        # print("Points connected")
         return output_array
     
     def CreateComposite(self, base_param_file):
