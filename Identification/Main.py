@@ -11,39 +11,55 @@ from astropy.io import fits
 import logging
 import time
 import matplotlib
-matplotlib.use('Agg')  # Non-GUI backend for thread safety
 import matplotlib.pyplot as plt
-
-# warnings.filterwarnings('ignore', category=UserWarning, module='astropy')
-# logging.getLogger('astropy').setLevel(logging.ERROR)
-
+matplotlib.use('Agg')
 
 if __name__ == "__main__":
     start = time.time()
-    #Folder with JWST image
-    galaxy_dir = r"C:\Users\HP\Documents\JHU_Academics\Research\Soax_results_blocking_V2"
-    decomposition_exists = True
-    if(not decomposition_exists):
-        Modified_Constrained_Diffusion.decompose(galaxy_dir)
-    FilamentMapList = mainFuncs.setUp(galaxy_dir)
-    mainFuncs.CreateSNRPlot(FilamentMapList, galaxy_dir, Write = True, verbose = False)
 
-    # #iterate through JWST files
-    for myFilMap in FilamentMapList:
-    #     #Run Everything to get Composite
-        myFilMap.ScaleBkgSub()
-        myFilMap.RunSoaxThreads()
-        myFilMap.CreateComposite("best_param1") #either this or run soax
-        myFilMap.BlurComposite(set_blur_as_prob = True)
-        myFilMap.SetIntensityMap(Orig = False)
-        myFilMap.DisplayProbIntensityPlot(galaxy_dir, Orig = False, Write = True, verbose = False)
-        myFilMap.ReHashComposite(ProbabilityThreshPercentile = .33, minPixBoxSize = 75) #formerly 75 increased to 100 for sim
+    #Params to Set
+    base_dir = r"C:\Users\HP\Documents\JHU_Academics\Research\FilPHANGS"
+    csv_path = r"C:\Users\HP\Documents\JHU_Academics\Research\FilPHANGS\ImageData.xlsx"
+    param_file_path = r"C:\Users\HP\Documents\JHU_Academics\Research\FilPHANGS\SoaxParams.txt"
+    probability_threshold = .1
+    min_area_pix = 75
+
+    #Create Directory
+    mainFuncs.create_directory_structure(base_dir)
+    #Clear Directory
+    # mainFuncs.clear_all_files()
+    mainFuncs.rename_fits_files(base_dir, csv_path)
+    #****star sub TBD****
+
+    #Loop through Each Galaxy
+    for Galaxy in os.listdir(base_dir):
+        galaxy_folder_path = os.path.join(base_dir, Galaxy)
+        if not os.path.isdir(galaxy_folder_path):  # Skip if it's not a directory
+            continue
+        if(Galaxy == 'OriginalMiriImages' and Galaxy != "Figures"): #remove later
+            print(f"Preparing analysis for {Galaxy}")
+            distance_Mpc,res, pixscale = mainFuncs.getInfo(Galaxy, csv_path) #get relevant information for image
+            if(not mainFuncs.decomposition_exists(galaxy_folder_path)): #decomposie original image into scales
+                Modified_Constrained_Diffusion.decompose(base_dir, Galaxy, distance_Mpc, res, pixscale)
+            FilamentMapList = mainFuncs.setUpGalaxy(base_dir, galaxy_folder_path, Galaxy, distance_Mpc, res, pixscale, param_file_path) #prepare all CDD images for one galaxy at a time
+            mainFuncs.CreateSNRPlot(FilamentMapList, base_dir, Write = False, verbose = False)
+            for myFilMap in FilamentMapList: #iterate through each decomposed image
+                myFilMap.ScaleBkgSub(WriteFits = False)
+                myFilMap.getNoiseLevelsHistogram(min = 10**-2, verbose = False, WriteFig = True)
+                myFilMap.RunSoaxThreads()
+                myFilMap.CreateComposite(param_file_path) #either this or run soax update to take param path
+                myFilMap.BlurComposite(set_blur_as_prob = True, WriteFits = True)
+                myFilMap.CreateProbIntensityPlot(base_dir, Orig = False, WriteFig = True, verbose = False) #setIntensityMap in this function??***********
+                myFilMap.ReHashComposite(ProbabilityThreshPercentile = .1, minPixBoxSize = 75, setAsComposite=True, WriteFits = True) 
+                myFilMap.generateSyntheticFilaments(verbose = False, WriteFits = True)
+                myFilMap.getFilamentLengthHistogram(probability_threshold = .1, verbose = False, WriteFig = True)
+
+    #Time information
     end = time.time()
     elapsed_time = end - start
     hours = int(elapsed_time // 3600)
     minutes = int((elapsed_time % 3600) // 60)
     seconds = int(elapsed_time % 60)
-    
     print(f'FilPHANGS took: {hours:02d}:{minutes:02d}:{seconds:02d} in total')
 
 
