@@ -2,7 +2,6 @@ import copy
 import numpy as np
 import cv2
 import matplotlib
-matplotlib.use('Agg')  # Non-GUI backend for thread safety
 import matplotlib.pyplot as plt
 from skimage.morphology import skeletonize
 import matplotlib.pyplot as plt
@@ -32,16 +31,26 @@ import threading
 import sys 
 import timeit 
 from multiprocessing import Process
-
+import matplotlib.pyplot as plt
+import numpy as np
+from skimage import measure
+matplotlib.use('Agg')
 
 class FilamentMap:
 
-    def __init__(self,  Scalepix, HomeDir, FitsFile, Galaxy):
-        fits_path = os.path.join(HomeDir, FitsFile)
+    def __init__(self,  Scalepix, base_dir, galaxy_folder_path, FitsFile, Galaxy, param_file_path, arcsin_performed = False):
+        CDD_path = os.path.join(galaxy_folder_path, "CDD")
+        fits_path = os.path.join(CDD_path, FitsFile)
         with fits.open(fits_path, ignore_missing=True) as hdul:
             OrigData = np.array(hdul[0].data)  # Assuming the image data is in the primary HDU
+            if(not arcsin_performed):
+                print("Arcsin Transfrom starting!")
+                a = .1
+                OrigData =a * np.arcsinh(OrigData/ a)
+
             OrigData = np.nan_to_num(OrigData, nan=0.0)  # Replace NaNs with 0
             OrigHeader = hdul[0].header
+
         self.Galaxy = Galaxy
         self.ProbabilityMap = np.zeros_like(OrigData)
         self.BkgSubMap = np.zeros_like(OrigData)
@@ -52,7 +61,7 @@ class FilamentMap:
         self.BlockHeader = OrigHeader.copy() #updated later
         self.Composite = np.zeros_like(OrigData)
         self.Scalepix = Scalepix
-        self.HomeDir = HomeDir
+        self.BaseDir = base_dir
         FitsFile = os.path.splitext(FitsFile)[0]  # removes the .fits extension
         self.FitsFile = FitsFile
         self.BlockFactor = self._getBlockFactor()
@@ -60,15 +69,14 @@ class FilamentMap:
             Sim = True
         else: 
             Sim = False
-        self.BlankRegionMask = self._GenerateBlankRegionMask(Sim)
+        self.BlankRegionMask = self._GenerateBlankRegionMask()
         if(self.BlockFactor != 0):
             self.BlockData = np.zeros((int(self.OrigData.shape[0] / self.BlockFactor), int(self.OrigData.shape[1] / self.BlockFactor))) 
         else: 
             self.BlockData = np.zeros_like(self.OrigData)
         self.IntensityMap = np.zeros_like(self.BlockData)
         self.NoiseMap = np.zeros_like(self.BlockData)
-
-
+        self.ParamFile = param_file_path
 
     def setBlockFactor(self, bf):
         self.BlockFactor = bf
@@ -113,7 +121,8 @@ class FilamentMap:
 
     def _getBlockFactor(self):
         file_name = self.FitsFile
-        folder_path = self.HomeDir
+        folder_path = os.path.join(self.BaseDir, self.Galaxy)
+        folder_path = os.path.join(folder_path, "CDD")
         
         # Pattern to match valid powers of two
         power_of_two_pattern = re.compile(r'(?<!\d)0*(8|16|32|64|128|256|512|1024)(?!\d)')
@@ -155,44 +164,15 @@ class FilamentMap:
 
         return block_factor
     
-    def getSmallestScaleData(self):
-        dir_path = fr"{self.HomeDir}"
-        pc_values = []
-        fits_files = []
-
-        # Search for fits files with parsec values
-        for file in os.listdir(dir_path):
-            if file.endswith('.fits'):
-                match = re.search(r'(\d+)pc', file)
-                if match:
-                    pc_value = int(match.group(1))
-                    pc_values.append(pc_value)
-                    fits_files.append((pc_value, file))
-        
-        # Find the file with the smallest parsec value
-        if pc_values:
-            smallest_pc_file = min(fits_files, key=lambda x: x[0])[1]
-            fits_path = os.path.join(dir_path, smallest_pc_file)
-            
-            # Open the fits file and return the data
-            with fits.open(fits_path, ignore_missing=True) as hdul:
-                data = hdul[0].data
-                return data
-        else:
-            raise FileNotFoundError("No FITS files with parsec values found.")
 
 
-    def _GenerateBlankRegionMask(self, Sim): # "_" indicates a protected method
+    def _GenerateBlankRegionMask(self): # "_" indicates a protected method
         data_to_mask = self.OrigData
         # data_to_mask = self.getSmallestScaleData()
         copy_image = copy.deepcopy(data_to_mask)
         #set thresholding for masking blank regions
-        if(Sim):
-            threshold = .05 # for simulated image
-            iters = 10
-        else: 
-            threshold = 10**-20 # for real image
-            iters = 10 #6 before *************
+
+        threshold = 10**-20 # for real image
 
         #Dilate White Pixels-->make more concise
         mask_copy = copy.deepcopy(copy_image)
@@ -211,7 +191,7 @@ class FilamentMap:
         binary_mask[~mask] = 0
         kernel_size = 15 #11 before ***********
         kernel = np.ones((kernel_size, kernel_size), np.uint8)
-        dilated_mask = cv2.dilate(binary_mask, kernel, iterations=iters)
+        dilated_mask = cv2.dilate(binary_mask, kernel, iterations=10)
 
         dilated_image = copy.deepcopy(copy_image)
         dilated_image[dilated_mask==255] = np.nan
@@ -219,11 +199,11 @@ class FilamentMap:
         #make a mask based on dilated image, true value indicates pixel should be masked
         mask = np.isnan(dilated_image)
         assert(not np.isnan(mask).any())
-        plt.imshow(np.uint8(mask) * 255)
-        plt.title(f"Mask of {self.Galaxy} at {self.Scale}")
-        galaxy_dir = r"C:\Users\HP\Documents\JHU_Academics\Research\Soax_results_blocking_V2"
-        plt.savefig(f"{galaxy_dir}\Figures\Mask_{self.Galaxy}_{self.Scale}.png")
-        plt.close()
+        # plt.imshow(np.uint8(mask) * 255)
+        # plt.title(f"Mask of {self.Galaxy} at {self.Scale}")
+        # galaxy_dir = r"C:\Users\HP\Documents\JHU_Academics\Research\Soax_results_blocking_V2"
+        # plt.savefig(f"{galaxy_dir}\Figures\Mask_{self.Galaxy}_{self.Scale}.png")
+        # plt.close()
         # plt.show()
         return  mask
 
@@ -232,25 +212,28 @@ class FilamentMap:
         try:
             mask = self.BlankRegionMask
             #copy data
-            data = copy.deepcopy(self.BlockData.astype(np.float64)) #photutils should take float64
+            data = copy.copy(self.BlockData.astype(np.float64)) #photutils should take float64
             #subtract bkg
             bkg_estimator = MedianBackground()
             if(self.BlockFactor == 0):
                 blockFactor = 1
             else: 
                 blockFactor = self.BlockFactor 
+            print(f"Pix scale: {self.Scalepix}")
             bkg = Background2D(data, box_size=round(10.*self.Scalepix/(2.*blockFactor))*2+1, coverage_mask = mask, exclude_percentile = 10, filter_size=(3,3), bkg_estimator=bkg_estimator) #Very different RMS with mask. Minimum is MUCH larger
             data -= bkg.background #subtract bkg
+
             data[data < 0] = 0 #Elimate neg values. This is over estimating the background and messes up fits files
 
             #bkg sub/RMS map
             noise = bkg.background_rms
+
             noise[noise < 10**-2 ] = 10**-2 #replace unphysical and absent noise with 10^-3 just to avoid division by zero
             print(f"noise min: {np.min(noise)}")
 
             divRMS = data/noise
             print(f"bkg sub max: {np.max(divRMS)}")
-            divRMS[(mask == 1) | (noise == 0)] = 0 #masked regions are zero...can change to some reasonable value but doesn't really matter for SOAX
+            divRMS[(mask == 1)] = 0 #masked regions are zero...can change to some reasonable value but doesn't really matter for SOAX
             self.BkgSubMap = divRMS
             self.NoiseMap = noise
         except ValueError:
@@ -261,79 +244,33 @@ class FilamentMap:
         # plt.title("bkg sub map")
         # plt.show()
         #save as fits if Write is true
-        out_path = fr"{self.HomeDir}\BkgSubDivRMS\{self.FitsFile}_divRMS.fits"
-        hdu = fits.PrimaryHDU(self.BkgSubMap, header=self.BlockHeader)
-        hdu.writeto(out_path, overwrite=True)
 
-
-    def ScaleBkgSub(self):
+    def ScaleBkgSub(self, WriteFits):
         # Normalize the image data
-        topval = self._getTopVal()  # Assuming this method returns the top value for scaling
-        file = fr"{self.HomeDir}\BkgSubDivRMS\{self.FitsFile}_divRMS.fits"
-        with fits.open(file, ignore_missing=True) as hdul:
-            image_data = hdul[0].data  # Access the image data from the PrimaryHDU
-
-            # Ensure the data is a NumPy array
-            if image_data is None:
-                raise ValueError(f"No image data found in FITS file: {file}")
-            
+        topval = 20
+        image_data = self.BkgSubMap
         print(f"Top Val: {topval}")
         if topval == 0:
             raise ValueError("Top value for scaling is zero, cannot divide by zero.")
         
         # Scale the image data
         self.BkgSubMap = np.array(image_data) * 65535 / topval
-
+        self.BkgSubMap[self.BkgSubMap > 65535] = 65535
         # Save a PNG for SOAX
-        save_png_path = fr"{self.HomeDir}\BlockedPng\{self.FitsFile}_Blocked.png"
+        save_png_path = fr"{self.BaseDir}\{self.Galaxy}\BlockedPng\{self.FitsFile}_Blocked.png"
         pngData = self.BkgSubMap.astype(np.uint16)
         # plt.imshow(pngData, cmap = "gray")
         # plt.title(f"image data after scaling at {self.Scale}")
         # plt.show()
         cv2.imwrite(save_png_path, pngData)
 
+        if(WriteFits):
+            out_path = fr"{self.BaseDir}\{self.Galaxy}\BkgSubDivRMS\{self.FitsFile}_divRMS.fits"
+            hdu = fits.PrimaryHDU(self.BkgSubMap, header=self.BlockHeader)
+            hdu.writeto(out_path, overwrite=True)
 
-    def _getTopVal(self):
-        """
-        Navigates to the designated directory, opens every FITS file,
-        finds the 99th percentile in each FITS file, and prints the file
-        containing the largest 99th percentile. Returns the largest value.
-        """
-        # Specify the directory
-        dir = fr"{self.HomeDir}\BkgSubDivRMS"
 
-        # Initialize variables to track the largest 99th percentile and corresponding file
-        max_percentile = -np.inf
-        max_file = None
-
-        # Navigate through files in the directory
-        for file in os.listdir(dir):
-            if file.endswith('.fits'):  # Process only FITS files
-                file_path = os.path.join(dir, file)
-                
-                # Open the FITS file
-                with fits.open(file_path, ignore_missing=True) as hdu:
-                    data = hdu[0].data  # Assuming data is in the primary HDU
-                    
-                    if data is not None:  # Ensure the FITS file contains data
-                        # Compute the 99th percentile
-                        percentile_99 = np.nanpercentile(data, 99.99)
-                        
-                        # Update if this file has the largest 99th percentile so far
-                        if percentile_99 > max_percentile:
-                            max_percentile = percentile_99
-                            max_file = file
-
-        # Print the file with the largest 99th percentile
-        if max_file:
-            print(f"File with largest 99th percentile: {max_file} ({max_percentile})")
-        else:
-            print("No FITS files found or valid data.")
-
-        # Return the largest 99th percentile
-        return max_percentile
-
-    def SetBlockData(self, Write = False):
+    def SetBlockData(self):
         if(self.BlockFactor !=0):
             new_pixel_scale = abs(self.OrigHeader['CDELT1']) * self.BlockFactor
             self.BlockHeader['CDELT1'] = new_pixel_scale
@@ -344,8 +281,11 @@ class FilamentMap:
             self.BlockHeader['CRPIX2'] = (self.OrigHeader['CRPIX2'] / self.BlockFactor) 
 
             # Reproject data
-            reprojected_data, _ = reproject_exact((self.OrigData, self.OrigHeader), self.BlockHeader, shape_out=(np.shape(self.BlockData)))
-            self.BlankRegionMask, _ = reproject_exact((self.BlankRegionMask, self.OrigHeader), self.BlockHeader.copy(), shape_out=(np.shape(self.BlockData)))
+            # reprojected_data, _ = reproject_exact((self.OrigData, self.OrigHeader), self.BlockHeader, shape_out=(np.shape(self.BlockData)))
+            reprojected_data = self.reprojectWrapper(self.OrigData, self.OrigHeader, self.BlockHeader, self.BlockData)
+            # self.BlankRegionMask, _ = reproject_exact((self.BlankRegionMask, self.OrigHeader), self.BlockHeader.copy(), shape_out=(np.shape(self.BlockData)))
+            self.BlankRegionMask = self.reprojectWrapper(self.BlankRegionMask, self.OrigHeader,self.BlockHeader, self.BlockData)
+
             # Crop NaN border (if necessary)
             self.BlockData = self._crop_nan_border(reprojected_data, (np.shape(self.BlockData)))
             self.BlankRegionMask = self._crop_nan_border(self.BlankRegionMask, (np.shape(self.BlockData)))
@@ -360,12 +300,6 @@ class FilamentMap:
         assert(np.sum(self.BlockData) !=0)
         print(f"Block Max: {np.max(self.BlockData)}")
 
-
-        # Write the modified data and header to a new FITS file
-        if(Write):
-            out_path = fr"{self.HomeDir}\BlockedFits\{self.FitsFile}_Blocked.fits"
-            hdu = fits.PrimaryHDU(self.BlockData, header=self.BlockHeader)  
-            hdu.writeto(out_path, overwrite=True)
 
 
 
@@ -423,7 +357,7 @@ class FilamentMap:
 
         for t in threads:
             t.join()
-          
+
         print("Threads done and terminal restored")
         end = time.time()
         elapsed_time = end - start
@@ -434,34 +368,28 @@ class FilamentMap:
         print(f'Elapsed time to run soax with 5 threads is: {hours:02d}:{minutes:02d}:{seconds:02d}')
 
     def RunSoax(self, ridge_start, ridge_stop, stretch_start, stretch_stop):
-        input_image = fr"{self.HomeDir}\BlockedPng\{self.FitsFile}_Blocked.png"
+        input_image = fr"{self.BaseDir}\{self.Galaxy}\BlockedPng\{self.FitsFile}_Blocked.png"
         batch = r"C:\Users\HP\Downloads\batch_soax_v3.7.0.exe"
-        parameter_folder = fr"C:\Users\HP\Documents\JHU_Academics\Research\Params" 
-        for parameter_file in os.listdir(parameter_folder):
-            param_text = os.path.join(parameter_folder, parameter_file)
-            base_param_file = os.path.splitext(parameter_file)[0]  # removes the .txt extension
-            output_dir = fr"{self.HomeDir}\SOAXOutput\{self.Scale}\{base_param_file}"
-            # print(f"out {output_dir}")
-            assert(os.path.isdir(output_dir))
-            assert( os.path.isfile(param_text))
-            assert(os.path.isfile(input_image))
-            print("starting Soax")
-            cmdString = f'"{batch}" soax -i "{input_image}" -p "{param_text}" -s "{output_dir}" --ridge {ridge_start} 0.0075 {ridge_stop} --stretch {stretch_start} 0.5 {stretch_stop}' #can update ridge and stretch later
-            
-            with open(os.devnull, 'w') as devnull:
-                subprocess.run(cmdString, shell=True, stdout=devnull, stderr=devnull) #supress output from threads because its garbage
+        output_dir = fr"{self.BaseDir}\{self.Galaxy}\SOAXOutput\{self.Scale}"
+        # print(f"out {output_dir}")
+        assert(os.path.isdir(output_dir))
+        assert( os.path.isfile(self.ParamFile))
+        assert(os.path.isfile(input_image))
+        print("starting Soax")
+        cmdString = f'"{batch}" soax -i "{input_image}" -p "{self.ParamFile}" -s "{output_dir}" --ridge {ridge_start} 0.0075 {ridge_stop} --stretch {stretch_start} 0.5 {stretch_stop}' #can update ridge and stretch later
+        
+        with open(os.devnull, 'w') as devnull:
+            subprocess.run(cmdString, shell=True, stdout=devnull, stderr=devnull) #supress output from threads because its garbage
 
-            # print(f"Complete Soax on {self.FitsFile}, converting set to FITS")
-            self._ConvertSoaxToFits(output_dir, base_param_file, ridge_start) #ridge_start can be used to specify the two SOAX files created by one process
-            print("Soax converted to Fits, Success!")
-            # self.CreateComposite(base_param_file)
+        self._ConvertSoaxToFits(output_dir, ridge_start) #ridge_start can be used to specify the two SOAX files created by one process
+        print("Soax converted to Fits, Success!")
 
-    def _ConvertSoaxToFits(self, outputDir, base_param_file, ridge_start): #contains ridge_start tag
+    def _ConvertSoaxToFits(self, outputDir, ridge_start): #contains ridge_start tag
         for result_file in os.listdir(outputDir):
             if(result_file.endswith('.txt') and str(ridge_start) in result_file):
                 result_file_base = os.path.splitext(result_file)[0]  # removes the .txt extension
-                interpolate_path = fr"{self.HomeDir}\SOAXOutput\{self.Scale}\{base_param_file}\Interpolate\{result_file_base}.fits"
-                result_file = fr"{self.HomeDir}\SOAXOutput\{self.Scale}\{base_param_file}\{result_file}"
+                interpolate_path = fr"{self.BaseDir}\{self.Galaxy}\SOAXOutput\{self.Scale}\{result_file_base}.fits"
+                result_file = fr"{self.BaseDir}\{self.Galaxy}\SOAXOutput\{self.Scale}\{result_file}"
                 self._txtToFilaments(result_file, interpolate_path) #use new_header for WCS and blocked_data dimesnions
 
 
@@ -563,9 +491,9 @@ class FilamentMap:
         return output_array
     
     def CreateComposite(self, base_param_file):
-        output_directory = fr"{self.HomeDir}\Composite"
-        directory = fr"{self.HomeDir}\SOAXOutput\{self.Scale}\{base_param_file}\Interpolate"
-        output_name = fr"{self.FitsFile}_Composite"
+        output_directory = fr"{self.BaseDir}\{self.Galaxy}\Composites"
+        directory = fr"{self.BaseDir}\{self.Galaxy}\SOAXOutput\{self.Scale}"
+        output_name = fr"{self.FitsFile}_Composites"
         common_string = self.FitsFile
         # Ensure the output directory exists
         os.makedirs(output_directory, exist_ok=True)
@@ -630,15 +558,18 @@ class FilamentMap:
         if(Orig):
             self.IntensityMap[self.Composite !=0] = 255*self.OrigData[self.Composite!=0]
         else: 
-            temp, _ = reproject_exact((self.ProbabilityMap, self.OrigHeader), self.BlockHeader.copy(), shape_out=(np.shape(self.BlockData)))
+            # temp, _ = reproject_exact((self.ProbabilityMap, self.OrigHeader), self.BlockHeader.copy(), shape_out=(np.shape(self.BlockData)))
+            temp = self.reprojectWrapper(self.ProbabilityMap, self.OrigHeader, self.BlockHeader, self.BlockData)
             temp = self._crop_nan_border(temp, (np.shape(self.BlockData)))
             self.IntensityMap[temp !=0] = self.BkgSubMap[temp!=0]
 
-    def DisplayProbIntensityPlot(self, galaxy_dir, Orig=True, Write=False, verbose=False):
+    def CreateProbIntensityPlot(self, galaxy_dir, Orig=True, WriteFig =False, verbose=False):
         if Orig:
             probability_flat = self.ProbabilityMap.flatten()
+            self.SetIntensityMap(Orig = True)
         else: 
-            temp, _ = reproject_exact((self.ProbabilityMap, self.OrigHeader), self.BlockHeader.copy(), shape_out=(np.shape(self.BlockData)))
+            self.SetIntensityMap(Orig = False)
+            temp = self.reprojectWrapper(self.ProbabilityMap, self.OrigHeader, self.BlockHeader, self.BlockData)
             temp = self._crop_nan_border(temp, (np.shape(self.BlockData)))
             probability_flat = temp.flatten()
 
@@ -691,13 +622,13 @@ class FilamentMap:
 
         # Save or display the plot
         plt.tight_layout()
-        if Write:
+        if WriteFig:
             plt.savefig(f"{galaxy_dir}/Figures/ProbIntensityPlot_{self.Galaxy}_{self.Scale}_{Orig}.png")
         if verbose:
             plt.show()
 
 
-    def BlurComposite(self, set_blur_as_prob = True, Write = True):
+    def BlurComposite(self, set_blur_as_prob = True, WriteFits = True):
         struct_width = self.Scale.replace('pc',"")
         struct_width = int(struct_width)
         # Convert structure width from parsecs to pixels
@@ -715,14 +646,14 @@ class FilamentMap:
         # plt.imshow( self.Composite)
         # plt.title("Blurred Composite Image")
         # plt.show()
-        if(Write):
-            output_directory = fr"{self.HomeDir}\Composite"
+        if(WriteFits):
+            output_directory = fr"{self.BaseDir}\{self.Galaxy}\Composites"
             output_name = fr"{self.FitsFile}_CompositeBlur"
             output_fits_path = os.path.join(output_directory, output_name + '.fits')
             hdu = fits.PrimaryHDU(data=blurred_image, header=self.OrigHeader)
             hdu.writeto(output_fits_path, overwrite=True)
 
-    def ReHashComposite(self, ProbabilityThreshPercentile, minPixBoxSize):
+    def ReHashComposite(self, ProbabilityThreshPercentile, minPixBoxSize, setAsComposite= False, WriteFits = True):
         print(f"Blur Max: {np.max(self.Composite)}")
         # plt.imshow( self.Composite, cmap = "gray")
         # plt.title("Blurred Composite Image before threshold")
@@ -746,15 +677,18 @@ class FilamentMap:
                 for y in range(height):
                     img[top:top+height, left:left+width] = 0
 
-        self.Composite = img
+        if(setAsComposite):
+            self.Composite = img
+
         # plt.imshow( self.Composite)
         # plt.title("Blurred Composite Image before threshold")
-        # plt.show()    
-        output_directory = fr"{self.HomeDir}\Composite"
-        output_name = fr"{self.FitsFile}_Composite_{ProbabilityThreshPercentile}"
-        output_fits_path = os.path.join(output_directory, output_name + '.fits')
-        hdu = fits.PrimaryHDU(data=img, header=self.OrigHeader)
-        hdu.writeto(output_fits_path, overwrite=True)
+        # plt.show() 
+        if WriteFits:   
+            output_directory = fr"{self.BaseDir}\{self.Galaxy}\Composites"
+            output_name = fr"{self.FitsFile}_Composite_{ProbabilityThreshPercentile}"
+            output_fits_path = os.path.join(output_directory, output_name + '.fits')
+            hdu = fits.PrimaryHDU(data=img, header=self.OrigHeader)
+            hdu.writeto(output_fits_path, overwrite=True)
     
     def getGalaxy(self):
         return self.Galaxy   
@@ -765,3 +699,73 @@ class FilamentMap:
     def getScale(self):
         return self.Scale  
                                 
+
+    def getFilamentLengthHistogram(self, probability_threshold, verbose = False, WriteFig = True):
+        # Label connected components
+        labeled_image = measure.label(self.Composite, connectivity=2)
+        regions = measure.regionprops(labeled_image)
+
+        # Calculate lengths (perimeter) of each curve
+        lengths = [region.perimeter for region in regions]
+
+        # Plot histogram
+        plt.figure(figsize=(8, 6))
+        plt.hist(lengths, bins=20, color='blue', edgecolor='black')
+        plt.title(f'Filament Length Histogram using prob_threshold {probability_threshold} for {self.Galaxy} at {self.Scale}')
+        plt.xlabel('Length (pixels)')
+        plt.ylabel('Frequency')
+        if WriteFig:
+            plt.savefig(fr"C:\Users\HP\Documents\JHU_Academics\Research\Soax_results_blocking_V2\Figures\FilamentLengthHistogram_{self.Galaxy}_{self.Scale}.png")
+        if(verbose):
+            plt.show()
+
+    def getNoiseLevelsHistogram(self, min = 10**-2, verbose = False, WriteFig = True):
+        noise = self.NoiseMap.flatten()
+        noise = noise[noise != 0]
+                # Plot histogram
+        plt.figure(figsize=(8, 6))
+        plt.hist(noise, bins=20, color='blue', edgecolor='black')
+        plt.title(f'noise histogram for {self.Galaxy} at {self.Scale} with artificially set minimum of {min} and zero removed)')
+        plt.xlabel('noise')
+        plt.ylabel('Frequency')
+        if WriteFig:
+            plt.savefig(fr"{self.BaseDir}\Figures\NoiseLevelHistogram_{self.Galaxy}_{self.Scale}.png")
+        if(verbose):
+            plt.show()
+
+    def generateSyntheticFilaments(self, verbose = False, WriteFits = True):
+        fits_path = os.path.join(self.BaseDir, self.Galaxy)
+        fits_path = os.path.join(fits_path, "CDD")
+        fits_path = os.path.join(fits_path, self.FitsFile + ".fits")
+        with fits.open(fits_path, ignore_missing=True) as hdul:
+            inData = np.array(hdul[0].data)  # Assuming the image data is in the primary HDU
+        intensity_skel = self.Composite * inData
+        struct_width = self.Scale.replace('pc',"")
+        struct_width = int(struct_width)
+        # Convert structure width from parsecs to pixels
+        structure_width_pixels = struct_width / self.Scalepix
+        # Calculate sigma for Gaussian convolution
+        sigma = structure_width_pixels / 2.355  # FWHM = 2.355 * sigma -> sigma = FWHM / 2.355
+        blurred_image = gaussian_filter(intensity_skel, sigma=sigma)        
+        plt.figure(figsize=(8, 6))
+        plt.imshow(blurred_image)
+        plt.title(f'Synthetic Filament Map')
+        os.makedirs(f"{self.BaseDir}\SyntheticMap", exist_ok=True)
+        save_path = os.path.join(f"{self.BaseDir}\SyntheticMap", f"SyntheticMap_{self.Scale}.fits")
+        if WriteFits:
+            hdu = fits.PrimaryHDU(blurred_image, header=self.OrigHeader)
+            hdu.writeto(save_path, overwrite=True)
+        if(verbose):
+            plt.show()
+
+    def reprojectWrapper(self, OrigData, OrigHeader, BlockHeader, BlockData):
+        print("Reprojecting now!")
+        start = time.time()
+        reprojected_data, _ = reproject_exact((OrigData, OrigHeader), BlockHeader, shape_out=(np.shape(BlockData)))
+        end = time.time()
+        elapsed_time = end - start
+        hours = int(elapsed_time // 3600)
+        minutes = int((elapsed_time % 3600) // 60)
+        seconds = int(elapsed_time % 60)
+        print(f"Reprojection complete in {hours:02d}:{minutes:02d}:{seconds:02d} in total!")
+        return reprojected_data
