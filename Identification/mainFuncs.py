@@ -19,7 +19,9 @@ def getInfo(Galaxy,  csv_path):
         distance = galaxy_info.iloc[0]['current_dist']
         res = galaxy_info.iloc[0]['res']
         pixscale = galaxy_info.iloc[0]['pixscale']
-        return distance, res, pixscale
+        min_power = galaxy_info.iloc[0]['Power of 2 min']
+        max_power = galaxy_info.iloc[0]['Power of 2 max']
+        return distance, res, pixscale, min_power, max_power
     else: 
         print("Galaxy not found in csv!")
 
@@ -80,7 +82,7 @@ def CreateSNRPlot(FilamentMapList, galaxy_dir, Write = False, verbose = False):
             plt.show()
 
 
-def create_directory_structure(root_directory):
+def create_directory_structure(root_directory, csv_path):
     """
     Creates a directory structure based on FITS file names.
 
@@ -109,7 +111,11 @@ def create_directory_structure(root_directory):
                 subfolders = [
                     "CDD", "Composites", "BlockedPng", "SyntheticMap", "SoaxOutput", "BkgDivRMS"
                 ]
-                soax_subfolders = ["256pc", "128pc", "64pc", "32pc", "16pc", "8pc"]
+                _, _, _, min_power, max_power = getInfo(galaxy_name, csv_path) #get relevant information for image
+
+                soax_subfolders = []
+                for i in range(min_power, max_power + 1):
+                    soax_subfolders.append(str(2**i).lstrip("0") + "pc")
 
                 for subfolder in subfolders:
                     subfolder_path = os.path.join(galaxy_folder, subfolder)
@@ -122,24 +128,34 @@ def create_directory_structure(root_directory):
 
                 print(f"Directory structure created for galaxy: {galaxy_name}")
 
-def clear_all_files(root_directory):
+def clear_all_files(root_directory, csv_path, param_file_path):
     """
     Clears all files in subfolders under the specified root directory,
-    but keeps files directly in the root directory untouched.
+    but keeps files directly in the root directory and files in the "originalImages" folder untouched.
 
     Parameters:
     - root_directory (str): Path to the root directory to clear.
+    - csv_path (str): Path to the CSV file to exclude from deletion.
+    - param_file_path (str): Path to the parameter file to exclude from deletion.
     """
-    # Walk through all directories but skip the root level
+    # Walk through all directories and files
     for foldername, subfolders, filenames in os.walk(root_directory):
+        # Skip the root directory itself (no files will be deleted here)
         if foldername == root_directory:
-            continue  # Skip the root directory itself
+            continue
+
+        # Skip the "originalImages" folder and its contents
+        if "originalimages" in foldername.lower():  # Ensures case-insensitive check
+            continue
         
         # Delete files in subdirectories
         for filename in filenames:
             file_path = os.path.join(foldername, filename)
-            os.remove(file_path)
-            print(f"Deleted file: {file_path}")
+            
+            # Check if the file is not the CSV or parameter file, and ensure it's not in the "originalImages" folder
+            if file_path != csv_path and file_path != param_file_path:
+                os.remove(file_path)
+                print(f"Deleted file: {file_path}")
 
     print("All files cleared from subdirectories of the directory structure.")
 

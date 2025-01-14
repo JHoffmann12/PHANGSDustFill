@@ -83,41 +83,15 @@ class FilamentMap:
     
 
     def _getScale(self, fits_file):
-        if '128pc' in fits_file:
-            print('image is 128 parcec scale')
-            return "128pc"
+        scales = ["1024pc", "512pc", "256pc", "128pc", "64pc", "32pc", "16pc", "8pc", "4pc", "2pc", "1pc", ".5pc", ".25pc", ".125pc"]
         
-        elif '8pc' in fits_file: 
-            print('image is 8 parcec scale')
-            return "8pc"
-        
-        elif '16pc' in fits_file: 
-            print('image is 16 parcec scale')
-            return "16pc"
-        
-        elif '32pc' in fits_file: 
-            print('image is 32 parcec scale')
-            return "32pc"
-        
-        elif '64pc' in fits_file:
-            print('image is 64 parcec scale')
-            return "64pc"
+        for scale in scales:
+            if scale in fits_file:
+                print(f"Image is {scale} scale")
+                return scale
 
-        elif '256pc' in fits_file:
-            print('image is 256 parcec scale')
-            return "256pc"
-        
-        elif '512pc' in fits_file:
-            print('image is 512 parcec scale')
-            return "512pc"
-        
-        elif '1024pc' in fits_file:
-            print('image is 1024 parcec scale')
-            return "1024pc"
-
-        else:
-            print('invalid fits file')
-
+        print("Invalid FITS file: Scale not recognized")
+        return None
 
     def _getBlockFactor(self):
         file_name = self.FitsFile
@@ -125,14 +99,14 @@ class FilamentMap:
         folder_path = os.path.join(folder_path, "CDD")
         
         # Pattern to match valid powers of two
-        power_of_two_pattern = re.compile(r'(?<!\d)0*(8|16|32|64|128|256|512|1024)(?!\d)')
+        power_of_two_pattern = re.compile(r'(?<!\d)0*(.125|.25|.5|1|2|4|8|16|32|64|128|256|512|1024)(?!\d)') #2^-3 to 2^10
         powers_of_two = []
 
         # Extract powers of two from filenames in the folder
         for f in os.listdir(folder_path):
             match = power_of_two_pattern.search(f)
             if match:
-                powers_of_two.append(int(match.group(0)))
+                powers_of_two.append(float(match.group(0)))
 
         if not powers_of_two:
             raise ValueError("No valid power of two found in file names.")
@@ -145,7 +119,7 @@ class FilamentMap:
         if not current_match:
             raise ValueError(f"File name '{file_name}' does not contain a valid power of two.")
         
-        current_power = int(current_match.group(0))
+        current_power = float(current_match.group(0))
 
         # Ensure the current power exists in the list
         if current_power not in sorted_powers:
@@ -153,15 +127,13 @@ class FilamentMap:
 
         # Determine the rank (index) of the current power of two in the sorted list
         rank = sorted_powers.index(current_power)
-
-
-        # Return the block factor as 2 raised to the rank
+        # if(current_power <=1):
+        #     return 0
+        # else: 
         block_factor = 2 ** rank
-        if(block_factor == 1):
+        if(block_factor <= 1):
             block_factor = 0
-
         print(f"Block Factor: {block_factor}")
-
         return block_factor
     
 
@@ -220,7 +192,13 @@ class FilamentMap:
             else: 
                 blockFactor = self.BlockFactor 
             print(f"Pix scale: {self.Scalepix}")
-            bkg = Background2D(data, box_size=round(10.*self.Scalepix/(2.*blockFactor))*2+1, coverage_mask = mask, exclude_percentile = 10, filter_size=(3,3), bkg_estimator=bkg_estimator) #Very different RMS with mask. Minimum is MUCH larger
+            box_size = round(10.*self.Scalepix/(2.*blockFactor))*2+1
+            if(box_size < .02* np.min((np.shape(data)[0], np.shape(data)[1]))):
+                print("Correcting box size")
+                box_size = int(.02*np.min((np.shape(data)[0], np.shape(data)[1]))) * 2 + 1 #weird fix for now by fixing box size at 2% of smaller dimension?
+
+            print(f"Box size: {box_size} and image shape: {np.shape(data)}")
+            bkg = Background2D(data, box_size=box_size, coverage_mask = mask, exclude_percentile = 10, filter_size=(3,3), bkg_estimator=bkg_estimator) #Very different RMS with mask. Minimum is MUCH larger
             data -= bkg.background #subtract bkg
 
             data[data < 0] = 0 #Elimate neg values. This is over estimating the background and messes up fits files
@@ -265,7 +243,8 @@ class FilamentMap:
         cv2.imwrite(save_png_path, pngData)
 
         if(WriteFits):
-            out_path = fr"{self.BaseDir}\{self.Galaxy}\BkgSubDivRMS\{self.FitsFile}_divRMS.fits"
+            print('saving bkg sub as fits')
+            out_path = fr"{self.BaseDir}\{self.Galaxy}\BkgDivRMS\{self.FitsFile}_divRMS.fits"
             hdu = fits.PrimaryHDU(self.BkgSubMap, header=self.BlockHeader)
             hdu.writeto(out_path, overwrite=True)
 
@@ -371,10 +350,14 @@ class FilamentMap:
         input_image = fr"{self.BaseDir}\{self.Galaxy}\BlockedPng\{self.FitsFile}_Blocked.png"
         batch = r"C:\Users\HP\Downloads\batch_soax_v3.7.0.exe"
         output_dir = fr"{self.BaseDir}\{self.Galaxy}\SOAXOutput\{self.Scale}"
-        # print(f"out {output_dir}")
-        assert(os.path.isdir(output_dir))
-        assert( os.path.isfile(self.ParamFile))
-        assert(os.path.isfile(input_image))
+        try: 
+            assert(os.path.isdir(output_dir))
+            assert( os.path.isfile(self.ParamFile))
+            assert(os.path.isfile(input_image))
+        except AssertionError as e: 
+            print('Assertion failed')
+            print(f"Out: {output_dir}")
+            
         print("starting Soax")
         cmdString = f'"{batch}" soax -i "{input_image}" -p "{self.ParamFile}" -s "{output_dir}" --ridge {ridge_start} 0.0075 {ridge_stop} --stretch {stretch_start} 0.5 {stretch_stop}' #can update ridge and stretch later
         
@@ -630,7 +613,7 @@ class FilamentMap:
 
     def BlurComposite(self, set_blur_as_prob = True, WriteFits = True):
         struct_width = self.Scale.replace('pc',"")
-        struct_width = int(struct_width)
+        struct_width = float(struct_width)
         # Convert structure width from parsecs to pixels
         structure_width_pixels = struct_width / self.Scalepix
         
@@ -741,7 +724,7 @@ class FilamentMap:
             inData = np.array(hdul[0].data)  # Assuming the image data is in the primary HDU
         intensity_skel = self.Composite * inData
         struct_width = self.Scale.replace('pc',"")
-        struct_width = int(struct_width)
+        struct_width = float(struct_width)
         # Convert structure width from parsecs to pixels
         structure_width_pixels = struct_width / self.Scalepix
         # Calculate sigma for Gaussian convolution
@@ -751,7 +734,7 @@ class FilamentMap:
         plt.imshow(blurred_image)
         plt.title(f'Synthetic Filament Map')
         os.makedirs(f"{self.BaseDir}\SyntheticMap", exist_ok=True)
-        save_path = os.path.join(f"{self.BaseDir}\SyntheticMap", f"SyntheticMap_{self.Scale}.fits")
+        save_path = os.path.join(f"{self.BaseDir}\{self.Galaxy}\SyntheticMap", f"SyntheticMap_{self.Scale}.fits")
         if WriteFits:
             hdu = fits.PrimaryHDU(blurred_image, header=self.OrigHeader)
             hdu.writeto(save_path, overwrite=True)
