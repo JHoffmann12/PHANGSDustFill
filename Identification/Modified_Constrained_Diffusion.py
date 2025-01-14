@@ -39,7 +39,7 @@ def get_fits_file_path(folder_path, galaxy_name):
     print(f"No FITS file found for galaxy: {galaxy_name}")
     return None
 
-def decompose(base_dir, Galaxy, distance_mpc, res, pixscale, perform_arcsin = False):
+def decompose(base_dir, Galaxy, distance_mpc, res, pixscale, min_power, max_power, perform_arcsin = False):
 
     fracsmooth=0.333 # to remove divots, CDD outputs will be smoothed with Gaussian kernel having sigma=fracsmooth*pcscale[or matching pixscale]
 
@@ -72,10 +72,10 @@ def decompose(base_dir, Galaxy, distance_mpc, res, pixscale, perform_arcsin = Fa
         hdu.info()
 
     pix_pc=4.848*pixscale*distance_mpc
-    pixscales=(2**np.array(range(3,9)))/pix_pc
+    pixscales=(2.0**np.array(range(min_power,max_power + 1)))/pix_pc
     pcscales = pixscales * pix_pc
-    pixscales_lo =(2**(np.array(range(3,9))-0.5))/pix_pc
-    pixscales_hi =(2**(np.array(range(3,9))+0.5))/pix_pc
+    pixscales_lo =(2.0**(np.array(range(min_power,max_power + 1))-0.5))/pix_pc
+    pixscales_hi =(2.0**(np.array(range(min_power, max_power + 1))+0.5))/pix_pc
     res_pc=4.848*res*distance_mpc
     idx=(pixscales_lo*pix_pc>=1.33*res_pc/2.35)  & (pixscales_hi*pix_pc/res_pc<=0.5*min_dim_img/2.35)  #*****FIX LATER!**********
     pixscales_hi = pixscales_hi[idx]
@@ -88,7 +88,6 @@ def decompose(base_dir, Galaxy, distance_mpc, res, pixscale, perform_arcsin = Fa
         image_in, pixscales, pixscales_lo, pixscales_hi, e_rel=3.e-2
     )
 
-    
     # Process and save outputs for each kernel size
     for idx, image_now in enumerate(result_in):
         header = header_in.copy()
@@ -110,7 +109,10 @@ def decompose(base_dir, Galaxy, distance_mpc, res, pixscale, perform_arcsin = Fa
             tag = 'pc.fits'
 
         base_name = os.path.splitext(os.path.basename(imagepath))[0]
-        outputpath = fr"{base_dir}\{Galaxy}\CDD\{base_name}_CDDss{str(int(pcscales[idx])).rjust(4, '0')}{tag}"
+        if pcscales[idx].is_integer():  # Check if the value is an integer
+            outputpath = fr"{base_dir}\{Galaxy}\CDD\{base_name}_CDDss{str(int(pcscales[idx])).rjust(4, '0')}{tag}"
+        else: 
+            outputpath = fr"{base_dir}\{Galaxy}\CDD\{base_name}_CDDss{str(float(pcscales[idx])).rjust(4, '0')}{tag}"
         hduout.writeto(outputpath, overwrite=True)
         print('Image saved')
 
