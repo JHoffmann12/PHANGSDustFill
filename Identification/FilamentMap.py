@@ -35,18 +35,22 @@ import matplotlib.pyplot as plt
 import numpy as np
 from skimage import measure
 matplotlib.use('Agg')
+from scipy.stats import lognorm
 
 class FilamentMap:
 
-    def __init__(self,  Scalepix, base_dir, galaxy_folder_path, FitsFile, Galaxy, param_file_path, arcsin_performed = False):
+    def __init__(self,  Scalepix, base_dir, galaxy_folder_path, FitsFile, Galaxy, param_file_path, flatten_perc, arcsin_performed = False):
         CDD_path = os.path.join(galaxy_folder_path, "CDD")
         fits_path = os.path.join(CDD_path, FitsFile)
         with fits.open(fits_path, ignore_missing=True) as hdul:
             OrigData = np.array(hdul[0].data)  # Assuming the image data is in the primary HDU
+            plt.imshow(OrigData)
+            plt.title("Original")            
+            plt.savefig(f"{base_dir}/{Galaxy}/BlockedPng/Zero_{self._getScale(FitsFile)}.png")
+            plt.close()
+
             if(not arcsin_performed):
-                print("Arcsin Transfrom starting!")
-                a = .1
-                OrigData =a * np.arcsinh(OrigData/ a)
+                OrigData = self.preprocess_image(OrigData, flatten_percent = flatten_perc)
 
             OrigData = np.nan_to_num(OrigData, nan=0.0)  # Replace NaNs with 0
             OrigHeader = hdul[0].header
@@ -78,12 +82,51 @@ class FilamentMap:
         self.NoiseMap = np.zeros_like(self.BlockData)
         self.ParamFile = param_file_path
 
+
+
+    def preprocess_image(self, image, skip_flatten=False, flatten_percent=None):
+        '''
+        Preprocess and flatten the image before running the masking routine.
+
+        Parameters
+        ----------
+        skip_flatten : bool, optional
+            Skip the flattening step and use the original image to construct
+            the mask. Default is False.
+        flatten_percent : int, optional
+            The percentile of the data (0-100) to set the normalization of the
+            arctan transform. By default, a log-normal distribution is fit and
+            the threshold is set to :math:`\mu + 2\sigma`. If the data contains
+            regions of a much higher intensity than the mean, it is recommended
+            this be set >95 percentile.
+
+        '''
+        if skip_flatten:
+            flatten_threshold = None
+            flat_img = image
+        else:
+            # Make flattened image
+            if flatten_percent is None:
+                # Fit to a log-normal distribution
+                fit_vals = lognorm.fit(image[~np.isnan(image)])  # Fit only non-NaN values
+                median = lognorm.median(*fit_vals)
+                std = lognorm.std(*fit_vals)
+                thresh_val = median + 2 * std
+            else:
+                # Use the specified percentile to calculate threshold
+                thresh_val = np.percentile(image[~np.isnan(image)], flatten_percent)
+
+            # Apply the arctan transform, ensuring that we are dividing by the threshold value
+            flat_img = thresh_val * np.arctan(image / thresh_val)
+        
+        return flat_img
+            
     def setBlockFactor(self, bf):
         self.BlockFactor = bf
     
 
     def _getScale(self, fits_file):
-        scales = ["1024pc", "512pc", "256pc", "128pc", "64pc", "32pc", "16pc", "8pc", "4pc", "2pc", "1pc", ".5pc", ".25pc", ".125pc"]
+        scales = ["1024pc", "512pc", "256pc", "128pc", "64pc", "32pc", "16pc", "8pc", "4pc", "2pc", "1pc", ".5pc", ".25pc", ".125pc", ".0625pc"]
         
         for scale in scales:
             if scale in fits_file:
@@ -99,7 +142,7 @@ class FilamentMap:
         folder_path = os.path.join(folder_path, "CDD")
         
         # Pattern to match valid powers of two
-        power_of_two_pattern = re.compile(r'(?<!\d)0*(.125|.25|.5|1|2|4|8|16|32|64|128|256|512|1024)(?!\d)') #2^-3 to 2^10
+        power_of_two_pattern = re.compile(r'(?<!\d)0*(.0625|.125|.25|.5|1|2|4|8|16|32|64|128|256|512|1024)(?!\d)') #2^-3 to 2^10
         powers_of_two = []
 
         # Extract powers of two from filenames in the folder
@@ -139,48 +182,51 @@ class FilamentMap:
 
 
     def _GenerateBlankRegionMask(self): # "_" indicates a protected method
+        threshold = 10**-20 
         data_to_mask = self.OrigData
-        # data_to_mask = self.getSmallestScaleData()
-        copy_image = copy.deepcopy(data_to_mask)
-        #set thresholding for masking blank regions
-
-        threshold = 10**-20 # for real image
+        
+        mask_copy = copy.deepcopy(data_to_mask)
 
         #Dilate White Pixels-->make more concise
-        mask_copy = copy.deepcopy(copy_image)
         mask_copy[mask_copy > threshold] = 255
         mask_copy = mask_copy.astype(np.uint8)
-        kernel_size = 3 
+        kernel_size = 3
         kernel = np.ones((kernel_size, kernel_size), np.uint8)
-        dilated_image = cv2.dilate(mask_copy, kernel, iterations= 30) #40 before ************
+        dilated_image = cv2.dilate(mask_copy, kernel, iterations= 5) #40 before ************
+        plt.imshow(dilated_image)
+        plt.show()
 
-        #Dilate nan pixels--> make more concise
-        copy_image = copy_image.astype(np.float32)
+
+        #threshold other way
+        copy_image = copy.deepcopy(data_to_mask).astype(np.float32)
         copy_image[dilated_image < threshold] = np.nan
         mask = np.isnan(copy_image)
+
+        #set up binary mask
         binary_mask = np.zeros_like(copy_image, dtype=np.uint8)
         binary_mask[mask] = 255
         binary_mask[~mask] = 0
-        kernel_size = 15 #11 before ***********
-        kernel = np.ones((kernel_size, kernel_size), np.uint8)
-        dilated_mask = cv2.dilate(binary_mask, kernel, iterations=10)
 
-        dilated_image = copy.deepcopy(copy_image)
+        #dilate the mask
+        kernel_size = 3
+        kernel = np.ones((kernel_size, kernel_size), np.uint8)
+        dilated_mask = cv2.dilate(binary_mask, kernel, iterations=1)
+
+        dilated_image = copy.deepcopy(data_to_mask).astype(np.float32)
         dilated_image[dilated_mask==255] = np.nan
 
         #make a mask based on dilated image, true value indicates pixel should be masked
         mask = np.isnan(dilated_image)
         assert(not np.isnan(mask).any())
-        # plt.imshow(np.uint8(mask) * 255)
-        # plt.title(f"Mask of {self.Galaxy} at {self.Scale}")
-        # galaxy_dir = r"C:\Users\HP\Documents\JHU_Academics\Research\Soax_results_blocking_V2"
-        # plt.savefig(f"{galaxy_dir}\Figures\Mask_{self.Galaxy}_{self.Scale}.png")
-        # plt.close()
+        plt.imshow(np.uint8(mask) * 255)
+        plt.title(f"Mask of {self.Galaxy} at {self.Scale}")
+        plt.savefig(f"{self.BaseDir}\Figures\Mask_{self.Galaxy}_{self.Scale}.png")
+        plt.close()
         # plt.show()
         return  mask
 
 
-    def SetBkgSub(self):
+    def SetBkgSub(self, noise_min, WriteFits = True):
         try:
             mask = self.BlankRegionMask
             #copy data
@@ -199,17 +245,36 @@ class FilamentMap:
 
             print(f"Box size: {box_size} and image shape: {np.shape(data)}")
             bkg = Background2D(data, box_size=box_size, coverage_mask = mask, exclude_percentile = 10, filter_size=(3,3), bkg_estimator=bkg_estimator) #Very different RMS with mask. Minimum is MUCH larger
+            # plt.imshow(data)
+            # plt.title("After arcsin transfrom")            
+            # plt.savefig(f"{self.BaseDir}/{self.Galaxy}/BlockedPng/First_{self.Scale}.png")
+            # plt.close()
+
             data -= bkg.background #subtract bkg
 
+            # plt.imshow(data)
+            # plt.title("After bkg subtraction")            
+            # plt.savefig(f"{self.BaseDir}/{self.Galaxy}/BlockedPng/Second_{self.Scale}.png")
+            # plt.close()
             data[data < 0] = 0 #Elimate neg values. This is over estimating the background and messes up fits files
 
             #bkg sub/RMS map
             noise = bkg.background_rms
 
-            noise[noise < 10**-2 ] = 10**-2 #replace unphysical and absent noise with 10^-3 just to avoid division by zero
+            # plt.imshow(noise * 255)
+            # plt.title("Noise Map")            
+            # plt.savefig(f"{self.BaseDir}/{self.Galaxy}/BlockedPng/Noise_{self.Scale}.png")
+            # plt.close()
+
+            noise[noise < noise_min] = 1 #replace unphysical and absent noise with 10^-3 just to avoid division by zero
             print(f"noise min: {np.min(noise)}")
 
             divRMS = data/noise
+            # plt.imshow(divRMS)
+            # plt.title("After dividing by RMS")            
+            # plt.savefig(f"{self.BaseDir}/{self.Galaxy}/BlockedPng/Third_{self.Scale}.png")
+            # plt.close()
+
             print(f"bkg sub max: {np.max(divRMS)}")
             divRMS[(mask == 1)] = 0 #masked regions are zero...can change to some reasonable value but doesn't really matter for SOAX
             self.BkgSubMap = divRMS
@@ -218,15 +283,10 @@ class FilamentMap:
             print("Majrity Black pixels, error in DivRMS")
             self.BkgSubMap = self.BlockData
 
-        # plt.imshow(self.BkgSubMap)
-        # plt.title("bkg sub map")
-        # plt.show()
-        #save as fits if Write is true
-
-    def ScaleBkgSub(self, WriteFits):
         # Normalize the image data
-        topval = 20
+        topval = 20 #np.percentile(self.BkgSubMap, 99)
         image_data = self.BkgSubMap
+
         print(f"Top Val: {topval}")
         if topval == 0:
             raise ValueError("Top value for scaling is zero, cannot divide by zero.")
@@ -234,6 +294,12 @@ class FilamentMap:
         # Scale the image data
         self.BkgSubMap = np.array(image_data) * 65535 / topval
         self.BkgSubMap[self.BkgSubMap > 65535] = 65535
+
+        # plt.imshow(self.BkgSubMap)
+        # plt.title("After Scaling")            
+        # plt.savefig(f"{self.BaseDir}/{self.Galaxy}/BlockedPng/Fourth_{self.Scale}.png")
+        # plt.close()
+        
         # Save a PNG for SOAX
         save_png_path = fr"{self.BaseDir}\{self.Galaxy}\BlockedPng\{self.FitsFile}_Blocked.png"
         pngData = self.BkgSubMap.astype(np.uint16)
@@ -249,16 +315,24 @@ class FilamentMap:
             hdu.writeto(out_path, overwrite=True)
 
 
+
+
     def SetBlockData(self):
         if(self.BlockFactor !=0):
-            new_pixel_scale = abs(self.OrigHeader['CDELT1']) * self.BlockFactor
+            new_pixel_scale = (self.OrigHeader['CDELT1']) * self.BlockFactor
             self.BlockHeader['CDELT1'] = new_pixel_scale
             self.BlockHeader['CDELT2'] = new_pixel_scale
 
             # Apply scale factor and adjust for 0.5-pixel offset
-            self.BlockHeader['CRPIX1'] = (self.OrigHeader['CRPIX1'] / self.BlockFactor)
-            self.BlockHeader['CRPIX2'] = (self.OrigHeader['CRPIX2'] / self.BlockFactor) 
+            # self.BlockHeader['CRPIX1'] = (self.OrigHeader['CRPIX1'] / self.BlockFactor)
+            # self.BlockHeader['CRPIX2'] = (self.OrigHeader['CRPIX2'] / self.BlockFactor) 
+            # Adjust reference pixel for 0.5-pixel offset
+            self.BlockHeader['CRPIX1'] = (self.OrigHeader['CRPIX1']) / self.BlockFactor 
+            self.BlockHeader['CRPIX2'] = (self.OrigHeader['CRPIX2']) / self.BlockFactor 
 
+            # Update dimensions for the blocked image
+            # self.BlockHeader['NAXIS1'] = self.OrigHeader['NAXIS1'] // self.BlockFactor
+            # self.BlockHeader['NAXIS2'] = self.OrigHeader['NAXIS2'] // self.BlockFactor  
             # Reproject data
             # reprojected_data, _ = reproject_exact((self.OrigData, self.OrigHeader), self.BlockHeader, shape_out=(np.shape(self.BlockData)))
             reprojected_data = self.reprojectWrapper(self.OrigData, self.OrigHeader, self.BlockHeader, self.BlockData)
@@ -317,12 +391,14 @@ class FilamentMap:
         return cropped_image
     
 
-    def RunSoaxThreads(self):
+    def RunSoaxThreads(self, min_snake_length_ss, min_fg_int):
         stretch_start = 1.75
         stretch_stop = 2.5
+        new_length = round(min_snake_length_ss - ((math.sqrt(self.BlockFactor))*4))
+        print(f"New snake length: {new_length}")
+        self.update_minimum_snake_length(new_length, min_fg_int)
         print('Starting Threads and Suppressing SOAX Output')
         start = time.time()
-        
         threads = []
         for i in range(5):
             t = threading.Thread(target=self.RunSoax, kwargs={
@@ -366,6 +442,34 @@ class FilamentMap:
 
         self._ConvertSoaxToFits(output_dir, ridge_start) #ridge_start can be used to specify the two SOAX files created by one process
         print("Soax converted to Fits, Success!")
+
+
+    def update_minimum_snake_length(self, new_length, min_fg_int):
+        """
+        Updates the 'minimum-snake-length' field in the given file with a new value.
+
+        Parameters:
+        - file_path (str): Path to the .txt file to be updated.
+        - new_length (int or float): New value for the 'minimum-snake-length' field.
+        """
+        file_path = self.ParamFile
+        # Read the file contents
+        with open(file_path, 'r') as file:
+            lines = file.readlines()
+
+        # Modify the relevant line and store updated lines
+        updated_lines = []
+        for line in lines:
+            if line.startswith('minimum-snake-length'):
+                updated_lines.append(f'minimum-snake-length\t{new_length}\n')
+            elif line.startswith('minimum-foreground'):
+                updated_lines.append(f'minimum-foreground\t{min_fg_int}\n')
+            else:
+                updated_lines.append(line)
+
+        # Write the modified content back to the file
+        with open(file_path, 'w') as file:
+            file.writelines(updated_lines)
 
     def _ConvertSoaxToFits(self, outputDir, ridge_start): #contains ridge_start tag
         for result_file in os.listdir(outputDir):
@@ -424,7 +528,7 @@ class FilamentMap:
                 if s_value not in filament_dict:
                     filament_dict[s_value] = []  # Initialize the list for this s value
                 # Append the (x, y) coordinates as a tuple
-                filament_dict[s_value].append((round(float(row['x'])), round(float(row['y'])), float(row['fg_int'])))
+                filament_dict[s_value].append((round(float(row['x'])), round(float(row['y']))))
 
         self._Interpolate(filament_dict, interpolate_path)
 
@@ -439,14 +543,14 @@ class FilamentMap:
         for filament in filaments:
             x_coords = []
             y_coords = []
-            intensity = []
+            # intensity = []
             for pixel in filament:
                 x_coords.append(pixel[0])
                 y_coords.append(pixel[1])
-                intensity.append(pixel[2])
+                # intensity.append(pixel[2])
             world_coords = wcs_blocked.pixel_to_world(x_coords, y_coords)
             x_original, y_original = wcs_orig.world_to_pixel(world_coords)
-            coordinates = [(x, y, i) for x, y, i in zip(x_original, y_original, intensity) if not (np.isnan(x) or np.isnan(y))]
+            coordinates = [(x, y) for x, y in zip(x_original, y_original) if (not (np.isnan(x)) and (not np.isnan(y)))]
             new_image = self._connect_points_sequential(coordinates, np.shape(self.OrigData))
             final_image+=new_image
 
@@ -461,7 +565,7 @@ class FilamentMap:
 
     def _connect_points_sequential(self, points, image_shape):
         # print("Connecting points now!")
-        points = [(int(x), int(y), i) for x, y,i in points]
+        points = [(int(x), int(y)) for x, y in points]
         output_array = np.zeros(image_shape, dtype=np.uint8)
 
         # Draw lines between consecutive points
@@ -752,3 +856,6 @@ class FilamentMap:
         seconds = int(elapsed_time % 60)
         print(f"Reprojection complete in {hours:02d}:{minutes:02d}:{seconds:02d} in total!")
         return reprojected_data
+    
+    def applyIntensityThreshold(self, thresh):
+        self.Composite[self.OrigData < thresh] = 0

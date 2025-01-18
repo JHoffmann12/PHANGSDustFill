@@ -35,17 +35,17 @@ def getInfo(Galaxy,  csv_path):
         print(f"Galaxy name '{Galaxy}' not found in the distance table.")
         exit()
  
-def setUpGalaxy(base_dir, galaxy_folder_path,  Galaxy, distance_Mpc, res, pixscale, param_file_path): #Assumes no data is a simulation for now
+def setUpGalaxy(base_dir, galaxy_folder_path,  Galaxy, distance_Mpc, res, pixscale, param_file_path, noise_min, flatten_perc): #Assumes no data is a simulation for now
     FilamentMapList = []
     CDD_folder = os.path.join(galaxy_folder_path, "CDD")
     for fits_file in os.listdir(CDD_folder):
         if(fits_file.endswith(".fits")): 
             ScalePix = pixscale * (1/206265) * distance_Mpc * 10**6
-            MyFilMap = FilamentMap.FilamentMap(ScalePix, base_dir, galaxy_folder_path, fits_file, Galaxy, param_file_path) #change name later to be specific to the image
+            MyFilMap = FilamentMap.FilamentMap(ScalePix, base_dir, galaxy_folder_path, fits_file, Galaxy, param_file_path, flatten_perc) #change name later to be specific to the image
             # MyFilMap.setBlockFactor(4)
             MyFilMap.SetBlockData()
             #get BkgSub Image
-            MyFilMap.SetBkgSub()
+            MyFilMap.SetBkgSub(noise_min, WriteFits = True)
             #Block the image
             FilamentMapList.append(MyFilMap)
     return FilamentMapList
@@ -62,7 +62,7 @@ def CreateSNRPlot(FilamentMapList, galaxy_dir, Write = False, verbose = False):
         #to add to plot:
         scale = myFilMap.getScale()
         scale = scale.replace('pc', "")
-        scale = int(scale)
+        scale = float(scale)
         galaxy_dict[galaxy].append((scale, np.percentile(SNRMap, 99.99))) 
 
     # Plotting scatter plots for each galaxy
