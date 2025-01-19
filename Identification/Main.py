@@ -41,7 +41,7 @@ if __name__ == "__main__":
 
     start = time.time() #get start time
 
-    # mainFuncs.clear_all_files(base_dir, csv_path, param_file_path) #clear all files
+    # mainFuncs.clearAllFiles(base_dir, csv_path, param_file_path) #clear all files
     mainFuncs.renameFitsFiles(base_dir, csv_path) #apply naming convention to original files
     mainFuncs.createDirectoryStructure(base_dir, csv_path)  #Create Directory and sub folders
 

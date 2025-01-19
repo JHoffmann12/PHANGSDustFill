@@ -125,7 +125,7 @@ def decompose(label_folder_path, base_dir, label, distance_mpc, res, pixscale, m
         pixscales_lo =(2.0**(np.array(range(min_power,max_power + 1))-0.5))/pix_pc
         pixscales_hi =(2.0**(np.array(range(min_power, max_power + 1))+0.5))/pix_pc
         res_pc=4.848*res*distance_mpc
-        idx=(pixscales_lo*pix_pc>=1.33*res_pc/2.35)  & (pixscales_hi*pix_pc/res_pc<=0.5*min_dim_img/2.35)  #*****FIX LATER!**********
+        idx=(pixscales_lo*pix_pc>=1.33*res_pc/2.35)  & (pixscales_hi*pix_pc/res_pc<=0.5*min_dim_img/2.35)  #check that scales work
         pixscales_hi = pixscales_hi[idx]
         pixscales_lo = pixscales_lo[idx]
         pixscales = pixscales[idx]
@@ -147,14 +147,17 @@ def decompose(label_folder_path, base_dir, label, distance_mpc, res, pixscale, m
 
             psf_stddev = (pixscales[idx] * 2.35) * fracsmooth / 2.35  # Original stddev
 
-            image_now =convolve(image_now, Gaussian2DKernel(x_stddev=psf_stddev))        
+            try: 
+                image_now =convolve(image_now, Gaussian2DKernel(x_stddev=psf_stddev))    
+            except ValueError:
+                print("Error: Could not smooth CDD image with convolution")    
 
             hduout = fits.PrimaryHDU(data = image_now, header=header)
             tag = 'pc.fits'
 
             base_name = os.path.splitext(os.path.basename(imagepath))[0]
 
-            if pcscales[idx] > 1:  # Check if the value is an integer
+            if pcscales[idx] >= 1:  # Check if the value is an integer
                 pcscales[idx] = roundToNearestPowerOf2(pcscales[idx])
                 outputpath = fr"{base_dir}\{label}\CDD\{base_name}_CDDss{str(int(pcscales[idx])).rjust(4, '0')}{tag}"
             else: 
