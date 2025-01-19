@@ -1,124 +1,179 @@
-import os
+#Functions not associated with a filament map object but used within the main block of FilPHANGS
+
 import FilamentMap
-import numpy as np 
 import matplotlib
 import matplotlib.pyplot as plt
-from astropy.table import Table
-import re
-from astropy.io import fits
-from astropy.coordinates import EarthLocation
-import astropy.units as u  # Add this line to import the units
+import numpy as np
+import os
 import pandas as pd
+import re
+from astropy.coordinates import EarthLocation
+from astropy.io import fits
+from astropy.table import Table
+import astropy.units as u  # Add this line to import the units
+
 matplotlib.use('Agg')
 
-def getInfo(Galaxy,  csv_path):
-    table = pd.read_excel(csv_path)
-    galaxy_info = table[table['galaxy'].str.lower() == Galaxy.lower()]
 
-    if not galaxy_info.empty:
-        distance = galaxy_info.iloc[0]['current_dist']
-        res = galaxy_info.iloc[0]['res']
-        pixscale = galaxy_info.iloc[0]['pixscale']
-        min_power = galaxy_info.iloc[0]['Power of 2 min']
-        max_power = galaxy_info.iloc[0]['Power of 2 max']
+def getInfo(label, csv_path):
+
+    """
+    Read the csv file for information about an image and return the distance, res, pixscale, and powers of 2
+
+    Parameter
+    - label (str): The label for the celestial object that the image is of, commonly a galaxy name
+    - csv_path (str): The path to the csv file containing relevant information
+
+    Returns:
+    - distance (float): distance to the image
+    - res (float): angular resolution
+    - pixscale (float): pixel resolution
+    - min_power (float): minimum power of 2 for scale decomposition
+    - max_power (float): maximum power of 2 for scale decomposition
+
+    """
+
+    table = pd.read_excel(csv_path)
+
+    try: 
+        label_info = table[table['label'].str.lower() == label.lower()]
+    except KeyError as e:
+        print("Error: Cannot find 'label' in csv file")
+        exit(1)
+
+    if not label_info.empty:
+        distance = label_info.iloc[0]['current_dist']
+        res = label_info.iloc[0]['res']
+        pixscale = label_info.iloc[0]['pixscale']
+        min_power = label_info.iloc[0]['Power of 2 min']
+        max_power = label_info.iloc[0]['Power of 2 max']
         return distance, res, pixscale, min_power, max_power
     else: 
         print("Galaxy not found in csv!")
 
-    # Check if galaxy exists in the distance table
-    if Galaxy in table['galaxy']:
-        # Extract the full row for the galaxy from the distance table
-        galaxy_row = table[table['galaxy'] == Galaxy]
-        print(f"Galaxy {Galaxy} found in distance table:")
-        return galaxy_row
-    else:
-        print(f"Galaxy name '{Galaxy}' not found in the distance table.")
-        exit()
+
  
-def setUpGalaxy(base_dir, galaxy_folder_path,  Galaxy, distance_Mpc, res, pixscale, param_file_path, noise_min, flatten_perc): #Assumes no data is a simulation for now
+def setUpGalaxy(base_dir, label_folder_path,  label, distance_Mpc, res, pixscale, param_file_path, noise_min, flatten_perc): 
+
+    """
+    Constructs a filament map object for each scale decomposed image of a label/celestial object. 
+    Sets the blocked data and signal to noise image used in the SOAX algorithm. 
+
+    Parameters:
+    - base_dir (str): Base directory for all FilPHANGS files
+    - label_folder_path (str): path to the folder associated with the specified label/celestial object
+    - label (str): label of the desired celestial object
+    - distance_Mpc (float): Distance in Mega Parsecs to the celestial object
+    - res (float): angula resolution associated with the image
+    - pixscale (str): The pixel level resolution associated with the image
+    - param_file_path (float): Path to the file containing the soax parameters
+    - noise_min (float): minimum noise to be considered realistic in the image
+    - flatten_perc (str): Percentage to use in the arctan transform
+    
+    Returns:
+    - FilamentMapList (Filament Map): returns a list of the filament map objects for each scale of an image. 
+   
+    """
+        
     FilamentMapList = []
-    CDD_folder = os.path.join(galaxy_folder_path, "CDD")
-    for fits_file in os.listdir(CDD_folder):
+
+    CDD_folder = os.path.join(label_folder_path, "CDD")
+
+    for fits_file in os.listdir(CDD_folder): #iterate through CDD folder to create filament map objects for each scale decomposed image
+
         if(fits_file.endswith(".fits")): 
-            ScalePix = pixscale * (1/206265) * distance_Mpc * 10**6
-            MyFilMap = FilamentMap.FilamentMap(ScalePix, base_dir, galaxy_folder_path, fits_file, Galaxy, param_file_path, flatten_perc) #change name later to be specific to the image
-            # MyFilMap.setBlockFactor(4)
-            MyFilMap.SetBlockData()
-            #get BkgSub Image
-            MyFilMap.SetBkgSub(noise_min, WriteFits = True)
-            #Block the image
-            FilamentMapList.append(MyFilMap)
+            ScalePix = pixscale * 4.848 * distance_Mpc  #convert to parcecs per pixel
+            filMap = FilamentMap.FilamentMap(ScalePix, base_dir, label_folder_path, fits_file, label, param_file_path, flatten_perc) #create object
+            filMap.setBlockData() #set the blocked data
+            filMap.setBkgSubDivRMS(noise_min) #set the background subtracted and noise divided data
+            FilamentMapList.append(filMap) 
+
     return FilamentMapList
 
-def CreateSNRPlot(FilamentMapList, galaxy_dir, Write = False, verbose = False):
 
-    galaxy_dict = {}
-    # Iterate over each object and group them
-    for myFilMap in FilamentMapList:
-        galaxy = myFilMap.getGalaxy()
-        if galaxy not in galaxy_dict:
-            galaxy_dict[galaxy] = []
-        SNRMap = myFilMap.getBkgSubMap()
-        #to add to plot:
-        scale = myFilMap.getScale()
+
+def CreateSNRPlot(FilamentMapList, base_dir, percentile, write = False):
+
+    """
+    Create a plot of the Signal to noise ratio in an image before scaling the background subtracted and nosie divided image. 
+
+    Parameters:
+    - FilamentMapList (Filament Map): List of Scale ecomposed Filament Maps associated with a single label
+    - base_dir (str): path to the base directory
+    - percentile (float): percentile to create the SNR plot from
+    - write (bool): Boolean to indicate whether or not the plot should be saved 
+    """
+
+    label_dict = {}
+
+    for filMap in FilamentMapList:  # Iterate over each object, extract the needed data, and append to label_dict
+        label = filMap.getLabel()
+
+        if label not in label_dict:
+            label_dict[label] = []
+
+        SNRMap = filMap.getBkgSubDivRMSMap() 
+        scale = filMap.getScale()
         scale = scale.replace('pc', "")
         scale = float(scale)
-        galaxy_dict[galaxy].append((scale, np.percentile(SNRMap, 99.99))) 
+        label_dict[label].append((scale, np.percentile(SNRMap, percentile))) 
 
-    # Plotting scatter plots for each galaxy
-    for galaxy, data in galaxy_dict.items():
+    # Create scatter plot with points from each scale decomposed image
+    for label, data in label_dict.items():
         scales, percentiles = zip(*data)  # Unpack scales and percentiles
         plt.figure()
-        plt.scatter(scales, percentiles, label=f"Galaxy: {galaxy}")
+        plt.scatter(scales, percentiles, label= f"Celestial Object: {label}")
         plt.xlabel("Scale (pc)")
-        plt.ylabel("SNR 99.99 percentile")
-        plt.title(f"SNR Plot for Galaxy: {galaxy} without normalization and using unique masks")
+        plt.ylabel(f"SNR {percentile} percentile")
+        plt.title(f"SNR Plot for Galaxy: {label} without normalization and using unique masks")
         plt.legend()
         plt.grid(True)
 
-        if Write:
-            plt.savefig(f"{galaxy_dir}\Figures\SNRPlot_{galaxy}.png")
-        if(verbose):
-            plt.show()
+    if write:
+        plt.savefig(f"{base_dir}\Figures\SNRPlot_{label}.png")
+    plt.close()
 
 
-def create_directory_structure(root_directory, csv_path):
+def createDirectoryStructure(base_directory, csv_path):
+
     """
-    Creates a directory structure based on FITS file names.
+    Creates the directiry structure as described in the ReadME. Subfolders are created on images present in the "OriginalImages" fodler. 
 
     Parameters:
-    - folder_path (str): Path to the folder containing FITS files.
-    - root_directory (str): Path to the root directory where folders will be created.
+    - base_directory (str): path to the base directory for which all subfolders and files will be held
+    - csv_path (str): Path to the csv file containing image information
     """
-    folder_path = os.path.join(root_directory, "OriginalImages")
-    # Ensure the root directory exists
-    os.makedirs(root_directory, exist_ok=True)
-    figures_folder = os.path.join(root_directory, "Figures")
+
+    folder_path = os.path.join(base_directory, "OriginalImages")
+    os.makedirs(base_directory, exist_ok=True)  # Ensure the root directory exists
+    figures_folder = os.path.join(base_directory, "Figures") #make the figures folder
     os.makedirs(figures_folder, exist_ok=True)
 
-    # Iterate through all FITS files in the folder
+    # Iterate through all FITS files in the folder and create the needed subfolders
     for filename in os.listdir(folder_path):
+
         if filename.endswith('.fits'):
             # Extract the galaxy name using regex
             match = re.match(r"(.*?)_.*?\.fits", filename)
+
             if match:
-                galaxy_name = match.group(1)
+                label = match.group(1)
                 # Create the galaxy folder
-                galaxy_folder = os.path.join(root_directory, galaxy_name)
-                os.makedirs(galaxy_folder, exist_ok=True)
+                label_folder = os.path.join(base_directory, label)
+                os.makedirs(label_folder, exist_ok=True)
 
                 # Create subfolders
                 subfolders = [
-                    "CDD", "Composites", "BlockedPng", "SyntheticMap", "SoaxOutput", "BkgDivRMS"
+                    "CDD", "Composites", "BlockedPng", "SyntheticMap", "SoaxOutput", "BkgSubDivRMS"
                 ]
-                _, _, _, min_power, max_power = getInfo(galaxy_name, csv_path) #get relevant information for image
+                _, _, _, min_power, max_power = getInfo(label, csv_path) #get relevant information for image
 
                 soax_subfolders = []
                 for i in range(min_power, max_power + 1):
                     soax_subfolders.append(str(2**i).lstrip("0") + "pc")
 
                 for subfolder in subfolders:
-                    subfolder_path = os.path.join(galaxy_folder, subfolder)
+                    subfolder_path = os.path.join(label_folder, subfolder)
                     os.makedirs(subfolder_path, exist_ok=True)
 
                     # Create SOAXOutput subfolders
@@ -126,22 +181,26 @@ def create_directory_structure(root_directory, csv_path):
                         for soax_subfolder in soax_subfolders:
                             os.makedirs(os.path.join(subfolder_path, soax_subfolder), exist_ok=True)
 
-                print(f"Directory structure created for galaxy: {galaxy_name}")
+                print(f"Directory structure created for galaxy: {label}")
 
-def clear_all_files(root_directory, csv_path, param_file_path):
+
+
+def clearAllFiles(base_directory, csv_path, param_file_path):
+
     """
-    Clears all files in subfolders under the specified root directory,
-    but keeps files directly in the root directory and files in the "originalImages" folder untouched.
+    Clears all files in subfolders under the specified base directory,
+    but keeps files directly in the base directory and files in the "originalImages" folder untouched.
 
     Parameters:
-    - root_directory (str): Path to the root directory to clear.
+    - base_directory (str): Path to the base directory to clear.
     - csv_path (str): Path to the CSV file to exclude from deletion.
     - param_file_path (str): Path to the parameter file to exclude from deletion.
     """
+
     # Walk through all directories and files
-    for foldername, subfolders, filenames in os.walk(root_directory):
+    for foldername, subfolders, filenames in os.walk(base_directory):
         # Skip the root directory itself (no files will be deleted here)
-        if foldername == root_directory:
+        if foldername == base_directory:
             continue
 
         # Skip the "originalImages" folder and its contents
@@ -159,20 +218,20 @@ def clear_all_files(root_directory, csv_path, param_file_path):
 
     print("All files cleared from subdirectories of the directory structure.")
 
-def rename_fits_files(base_dir, xlsx_path):
+
+
+def renameFitsFiles(base_dir, csv_path):
+
     """
-    Renames FITS files based on information from an Excel file.
+    Renames FITS files based on information from an Excel file. Forces naming convention discussed in the ReadMe. 
 
     Parameters:
     - base_dir (str): Path to the base directory containing the FITS files.
-    - xlsx_path (str): Path to the Excel file containing galaxy information.
+    - csv_path (str): Path to the Excel file containing image information.
     """
-    import os
-    import pandas as pd
-    import re
 
     # Load the Excel file into a DataFrame
-    table = pd.read_excel(xlsx_path)
+    table = pd.read_excel(csv_path)
     
     fits_file_folder_path = os.path.join(base_dir, "OriginalImages")
 
@@ -188,8 +247,13 @@ def rename_fits_files(base_dir, xlsx_path):
             galaxy_name = galaxy_match.group(1)
             
             # Find the row in the Excel file corresponding to the galaxy
-            galaxy_info = table[table['galaxy'].str.lower() == galaxy_name.lower()]
 
+            try: 
+                galaxy_info = table[table['label'].str.lower() == galaxy_name.lower()]
+            except KeyError as e:
+                print("Error: Cannot find 'label' in csv file")
+                exit(1)
+    
             if not galaxy_info.empty:
                 telescope = galaxy_info.iloc[0]['Telescope']
                 band = galaxy_info.iloc[0]['Band']
@@ -214,28 +278,3 @@ def rename_fits_files(base_dir, xlsx_path):
 
 
 
-def decomposition_exists(root_path):
-    """
-    Checks if the "CDD" folder in the specified path is empty or not.
-
-    Parameters:
-    - root_path (str): The root directory to check.
-
-    Returns:
-    - bool: True if the folder is not empty, False if it is empty or doesn't exist.
-    """
-    # Construct the CDD folder path
-    cdd_path = os.path.join(root_path, "CDD")
-
-    # Check if the folder exists
-    if not os.path.exists(cdd_path):
-        print(f"The folder 'CDD' does not exist in {root_path}.")
-        return False
-
-    # Check if the folder is empty
-    if not os.listdir(cdd_path):
-        print(f"The folder 'CDD' is empty in {root_path}.")
-        return False
-    else:
-        print(f"The folder 'CDD' is not empty in {root_path}.")
-        return True
