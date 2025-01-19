@@ -266,7 +266,7 @@ class FilamentMap:
             # plt.savefig(f"{self.BaseDir}/{self.Galaxy}/BlockedPng/Noise_{self.Scale}.png")
             # plt.close()
 
-            noise[noise < noise_min] = 1 #replace unphysical and absent noise with 10^-3 just to avoid division by zero
+            noise[noise < noise_min] = noise_min #replace unphysical and absent noise with 10^-3 just to avoid division by zero
             print(f"noise min: {np.min(noise)}")
 
             divRMS = data/noise
