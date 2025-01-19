@@ -1,29 +1,32 @@
-#https://archive.stsci.edu/hlsp/phangs.html#hst_image_products_table
-#https://stsci.app.box.com/s/mhr1srey2h05ta26grd6hyp839pdlvco/folder/300932267185?page=2
-import os
+#FilPHANGS Main script
+
+#imports 
+
 import FilamentMap
-import numpy as np 
-import mainFuncs
 import Modified_Constrained_Diffusion
-import threading 
-import warnings
-from astropy.io import fits
-import logging
-import time
+import mainFuncs
 import matplotlib
 import matplotlib.pyplot as plt
+import numpy as np
+import os
+import time
+from astropy.io import fits
+
 matplotlib.use('Agg')
 
+
+
 if __name__ == "__main__":
-    start = time.time()
 
     #Params to Set
+#   _____________________________________________________________________________________________
+#   ____________________________________________________________________________________________
 
     #paths
     base_dir = r"C:\Users\HP\Documents\JHU_Academics\Research\FilPHANGS"
     csv_path = r"C:\Users\HP\Documents\JHU_Academics\Research\FilPHANGS\ImageData.xlsx"
     param_file_path = r"C:\Users\HP\Documents\JHU_Academics\Research\FilPHANGS\SoaxParams.txt"
-    Soax_batch_path = ""
+    batch_path = r"C:\Users\HP\Downloads\batch_soax_v3.7.0.exe"
     #SOAX params
     min_snake_length_ss = 25
     min_fg_int = 1638
@@ -33,38 +36,46 @@ if __name__ == "__main__":
     noise_min = 10**-2 #.55 for IC5146
     flatten_perc = 90 #99 for IC5146
     min_intensity = 0
+#   ____________________________________________________________________________________________
+#   ____________________________________________________________________________________________
 
-    # mainFuncs.clear_all_files(base_dir, csv_path, param_file_path)
-    mainFuncs.rename_fits_files(base_dir, csv_path)
-    #Create Directory
-    mainFuncs.create_directory_structure(base_dir, csv_path)
-    #Clear Directory
-    #****star sub TBD****
+    start = time.time() #get start time
 
-    #Loop through Each Galaxy
-    for Galaxy in os.listdir(base_dir):
-        galaxy_folder_path = os.path.join(base_dir, Galaxy)
-        if not os.path.isdir(galaxy_folder_path):  # Skip if it's not a directory
+    # mainFuncs.clear_all_files(base_dir, csv_path, param_file_path) #clear all files
+    mainFuncs.renameFitsFiles(base_dir, csv_path) #apply naming convention to original files
+    mainFuncs.createDirectoryStructure(base_dir, csv_path)  #Create Directory and sub folders
+
+    for label in os.listdir(base_dir):  #Loop through Each Galaxy
+
+        label_folder_path = os.path.join(base_dir, label)
+
+        if not os.path.isdir(label_folder_path):  # Skip if it's not a directory
             continue
-        if(Galaxy != 'OriginalMiriImages' and Galaxy != "Figures" and Galaxy == "ngc0628"): #remove later
-            print(f"Preparing analysis for {Galaxy}")
-            distance_Mpc,res, pixscale, min_power, max_power = mainFuncs.getInfo(Galaxy, csv_path) #get relevant information for image
-            if(not mainFuncs.decomposition_exists(galaxy_folder_path)): #decomposie original image into scales
-                Modified_Constrained_Diffusion.decompose(base_dir, Galaxy, distance_Mpc, res, pixscale, min_power, max_power)
-            FilamentMapList = mainFuncs.setUpGalaxy(base_dir, galaxy_folder_path, Galaxy, distance_Mpc, res, pixscale, param_file_path, noise_min, flatten_perc) #prepare all CDD images for one galaxy at a time
-            mainFuncs.CreateSNRPlot(FilamentMapList, base_dir, Write = True, verbose = False)
-            for myFilMap in FilamentMapList: #iterate through each decomposed image
-                myFilMap.getNoiseLevelsHistogram(min = noise_min, verbose = False, WriteFig = True)
-                myFilMap.RunSoaxThreads(min_snake_length_ss, min_fg_int)
-                myFilMap.CreateComposite(param_file_path) #either this or run soax update to take param path
-                myFilMap.BlurComposite(set_blur_as_prob = True, WriteFits = True)
-                myFilMap.applyIntensityThreshold(min_intensity)
-                myFilMap.CreateProbIntensityPlot(base_dir, Orig = False, WriteFig = True, verbose = False) #setIntensityMap in this function??***********
-                myFilMap.ReHashComposite(ProbabilityThreshPercentile = probability_threshold, minPixBoxSize = min_area_pix, setAsComposite= False, WriteFits = True) 
-                myFilMap.generateSyntheticFilaments(verbose = False, WriteFits = True)
-                myFilMap.getFilamentLengthHistogram(probability_threshold = probability_threshold, verbose = False, WriteFig = True)
 
-    #Time information
+        if(label != 'OriginalMiriImages' and label != "Figures" and label == "ngc0628"): 
+
+            distance_Mpc,res, pixscale, min_power, max_power = mainFuncs.getInfo(label, csv_path) #get relevant information for image from csv file
+            Modified_Constrained_Diffusion.decompose(label_folder_path, base_dir, label, distance_Mpc, res, pixscale, min_power, max_power) #decompose into scales
+            FilamentMapList = mainFuncs.setUpGalaxy(base_dir, label_folder_path, label, distance_Mpc, res, pixscale, param_file_path, noise_min, flatten_perc) #Initialize Filament Map objects
+            mainFuncs.CreateSNRPlot(FilamentMapList, base_dir, percentile = 99, write = True)
+
+            for filMap in FilamentMapList: #iterate through each Filament Map object 
+
+                #Necessary functions in order to produce a skeletonized filament map
+                filMap.scaleBkgSubDivRMSMap(write_fits = True)
+                filMap.runSoaxThreads(min_snake_length_ss, min_fg_int, batch_path) #Create 10 soax FITS files
+                filMap.createComposite(write_fits = False) #Combine all 10 Fits files
+                filMap.blurComposite(set_blur_as_prob = True, write_fits = True) #Blur the composite
+                filMap.applyIntensityThreshold(min_intensity) #remove filaments below min_intensity in the CDD image
+                filMap.cleanComposite(probability_threshold = probability_threshold, min_area_pix = min_area_pix, set_as_composite = True, write_fits = True) #apply threshold, skeletonize, remove junctions
+
+                #Extra plots
+                filMap.getProbIntensityPlot(use_orig_img = False, write_fig = True) #Compares probability vs intensity
+                filMap.getSyntheticFilamentMap(write_fits = True) # Creates a synthetic map of all filaments at a single scale
+                filMap.getNoiseLevelsHistogram(noise_min = noise_min, write_fig = True)  # Histogram of calculated noise
+                filMap.getFilamentLengthHistogram(probability_threshold = probability_threshold, write_fig = True) # Histogram of filament length in pixels
+
+    # Display Time information
     end = time.time()
     elapsed_time = end - start
     hours = int(elapsed_time // 3600)
