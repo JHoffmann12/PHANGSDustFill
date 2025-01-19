@@ -301,7 +301,6 @@ class FilamentMap:
             self.BkgSubDivRMSMap = self.BlockData
 
 
-
     def scaleBkgSubDivRMSMap(self, write_fits):
 
         """
@@ -348,9 +347,9 @@ class FilamentMap:
         if(self.BlockFactor !=0):
 
             #fix the blocked header
-            new_pixel_scale = (self.OrigHeader['CDELT1']) * self.BlockFactor
-            self.BlockHeader['CDELT1'] = new_pixel_scale
-            self.BlockHeader['CDELT2'] = new_pixel_scale
+            print(f"Block factor: {self.BlockFactor} and Scale: {self.Scale}")
+            self.BlockHeader['CDELT1'] = (self.OrigHeader['CDELT1']) * self.BlockFactor
+            self.BlockHeader['CDELT2'] = (self.OrigHeader['CDELT2']) * self.BlockFactor
 
             self.BlockHeader['CRPIX1'] = (self.OrigHeader['CRPIX1']) / self.BlockFactor 
             self.BlockHeader['CRPIX2'] = (self.OrigHeader['CRPIX2']) / self.BlockFactor 

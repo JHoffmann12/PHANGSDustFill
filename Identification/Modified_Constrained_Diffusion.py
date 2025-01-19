@@ -12,6 +12,7 @@ from astropy.io import fits
 from astropy.table import Table
 from astropy.visualization import make_lupton_rgb
 from math import log
+import math
 from matplotlib import cm
 from pylab import *
 from scipy import ndimage
@@ -153,13 +154,34 @@ def decompose(label_folder_path, base_dir, label, distance_mpc, res, pixscale, m
 
             base_name = os.path.splitext(os.path.basename(imagepath))[0]
 
-            if pcscales[idx].is_integer():  # Check if the value is an integer
+            if pcscales[idx] > 1:  # Check if the value is an integer
+                pcscales[idx] = roundToNearestPowerOf2(pcscales[idx])
                 outputpath = fr"{base_dir}\{label}\CDD\{base_name}_CDDss{str(int(pcscales[idx])).rjust(4, '0')}{tag}"
             else: 
                 outputpath = fr"{base_dir}\{label}\CDD\{base_name}_CDDss{str(float(pcscales[idx])).rjust(4, '0')}{tag}"
 
             hduout.writeto(outputpath, overwrite=True)
             print('Image saved')
+
+def roundToNearestPowerOf2(n):
+
+    """
+    Rounds to nearest power of 2. Corrects small error that may occur in file names. 
+
+    Parameters:
+    - n (float): Number to round
+
+    Returns:
+    - bool: Nearest power of 2
+    """
+        
+    if n <= 0:
+        raise ValueError("Input must be a positive number.")
+    
+    lower_power = 2 ** math.floor(math.log2(n))
+    upper_power = 2 ** math.ceil(math.log2(n))
+
+    return lower_power if (n - lower_power) < (upper_power - n) else upper_power
 
 
 def decompositionExists(base_path):
