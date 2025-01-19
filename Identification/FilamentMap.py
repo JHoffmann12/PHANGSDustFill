@@ -336,8 +336,6 @@ class FilamentMap:
             hdu.writeto(out_path, overwrite=True)
 
 
-
-
     def setBlockData(self):
 
         """

@@ -147,8 +147,21 @@ def decompose(label_folder_path, base_dir, label, distance_mpc, res, pixscale, m
 
             psf_stddev = (pixscales[idx] * 2.35) * fracsmooth / 2.35  # Original stddev
 
+            if image_now.ndim > 2:
+                image_now = image_now.squeeze()  # Remove singleton dimensions
+            if image_now.ndim != 2:
+                raise ValueError(f"Input image must be 2D; got shape {image_now.shape}")
+
+            if psf_stddev <= 0:
+                raise ValueError(f"Invalid psf_stddev: {psf_stddev}. Must be > 0.")
+
+
+            assert len(result_in) == len(kernel_sizes) == len(pixscales) == len(pixscales_lo) == len(pixscales_hi), \
+                "Mismatch in input list lengths."
+
             try: 
-                image_now =convolve(image_now, Gaussian2DKernel(x_stddev=psf_stddev))    
+                image_now = np.nan_to_num(image_now)
+                image_now = gaussian_filter(image_now, sigma = psf_stddev)    
             except ValueError:
                 print("Error: Could not smooth CDD image with convolution")    
 
