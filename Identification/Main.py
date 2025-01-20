@@ -52,7 +52,7 @@ if __name__ == "__main__":
         if not os.path.isdir(label_folder_path):  # Skip if it's not a directory
             continue
 
-        if(label != 'OriginalMiriImages' and label != "Figures" and label == "IC5146"): 
+        if(label != 'OriginalMiriImages' and label != "Figures"): 
 
             distance_Mpc,res, pixscale, min_power, max_power = mainFuncs.getInfo(label, csv_path) #get relevant information for image from csv file
             Modified_Constrained_Diffusion.decompose(label_folder_path, base_dir, label, distance_Mpc, res, pixscale, min_power, max_power) #decompose into scales

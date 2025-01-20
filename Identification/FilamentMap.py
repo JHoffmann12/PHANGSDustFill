@@ -57,10 +57,6 @@ class FilamentMap:
 
         with fits.open(fits_path, ignore_missing=True) as hdul:
             OrigData = np.array(hdul[0].data)  # Assuming the image data is in the primary HDU
-            plt.imshow(OrigData)
-            plt.title("Original")            
-            plt.savefig(f"{base_dir}/{label}/BlockedPng/Zero_{self._getScale(fits_file)}.png")
-            plt.close()
 
             OrigData = self.preprocessImage(OrigData, flatten_percent = flatten_perc)
 
@@ -243,10 +239,10 @@ class FilamentMap:
         mask = np.isnan(dilated_image)
         assert(not np.isnan(mask).any())
 
-        # plt.imshow(np.uint8(mask) * 255)
-        # plt.title(f"Mask of {self.Label} at {self.Scale}")
-        # plt.savefig(f"{self.BaseDir}\Figures\Mask_{self.Label}_{self.Scale}.png")
-        # plt.close()
+        plt.imshow(np.uint8(mask) * 255)
+        plt.title(f"Mask of {self.Label} at {self.Scale}")
+        plt.savefig(f"{self.BaseDir}\Figures\Mask_{self.Label}_{self.Scale}.png")
+        plt.close()
 
         return  mask
 
