@@ -9,4 +9,4 @@ Steps to use this repo:
 2. In terminal type ' cd <directory_with_cloned_repo> ' 
 3. ' conda env create -f environment.yml '
 
-This will install all the necessary dependencies and ensure that you are good to go
+This will install all the necessary dependencies and ensure that you are good to go. 
