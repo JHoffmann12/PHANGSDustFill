@@ -31,7 +31,7 @@ if __name__ == "__main__":
     min_snake_length_ss = 25
     min_fg_int = 1638
     #Non SOAX params
-    probability_threshold = .15
+    probability_threshold = .3
     min_area_pix = 75
     noise_min = 10**-2 #.55 for IC5146
     flatten_perc = 90 #99 for IC5146
@@ -52,7 +52,7 @@ if __name__ == "__main__":
         if not os.path.isdir(label_folder_path):  # Skip if it's not a directory
             continue
 
-        if(label != 'OriginalMiriImages' and label != "Figures"): 
+        if(label != 'OriginalMiriImages' and label != "Figures" and label == "ngc0628"): 
 
             distance_Mpc,res, pixscale, min_power, max_power = mainFuncs.getInfo(label, csv_path) #get relevant information for image from csv file
             Modified_Constrained_Diffusion.decompose(label_folder_path, base_dir, label, distance_Mpc, res, pixscale, min_power, max_power) #decompose into scales
@@ -64,16 +64,17 @@ if __name__ == "__main__":
                 #Necessary functions in order to produce a skeletonized filament map
                 filMap.scaleBkgSubDivRMSMap(write_fits = True)
                 filMap.runSoaxThreads(min_snake_length_ss, min_fg_int, batch_path) #Create 10 soax FITS files
-                filMap.createComposite(write_fits = False) #Combine all 10 Fits files
+                filMap.createComposite(write_fits = True) #Combine all 10 Fits files
                 filMap.blurComposite(set_blur_as_prob = True, write_fits = True) #Blur the composite
                 filMap.applyIntensityThreshold(min_intensity) #remove filaments below min_intensity in the CDD image
-                filMap.cleanComposite(probability_threshold = probability_threshold, min_area_pix = min_area_pix, set_as_composite = True, write_fits = True) #apply threshold, skeletonize, remove junctions
+                skelData = filMap.applyProbabilityThresholdAndSkeletonize(probability_threshold = probability_threshold, min_area_pix = min_area_pix, write_fits = True)
+                filMap.removeJunctions(skelData, probability_threshold, min_area_pix, set_as_composite= False, write_fits = True)
 
                 #Extra plots
-                filMap.getProbIntensityPlot(use_orig_img = False, write_fig = True) #Compares probability vs intensity
-                filMap.getSyntheticFilamentMap(write_fits = True) # Creates a synthetic map of all filaments at a single scale
-                filMap.getNoiseLevelsHistogram(noise_min = noise_min, write_fig = True)  # Histogram of calculated noise
-                filMap.getFilamentLengthHistogram(probability_threshold = probability_threshold, write_fig = True) # Histogram of filament length in pixels
+                # filMap.getProbIntensityPlot(use_orig_img = False, write_fig = True) #Compares probability vs intensity
+                # filMap.getSyntheticFilamentMap(write_fits = True) # Creates a synthetic map of all filaments at a single scale. set_as_composite = True. 
+                # filMap.getNoiseLevelsHistogram(noise_min = noise_min, write_fig = True)  # Histogram of calculated noise
+                # filMap.getFilamentLengthHistogram(probability_threshold = probability_threshold, write_fig = True) # Histogram of filament length in pixels
 
     # Display Time information
     end = time.time()

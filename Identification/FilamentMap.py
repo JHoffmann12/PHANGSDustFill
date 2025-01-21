@@ -854,17 +854,23 @@ class FilamentMap:
 
 
 
-    def cleanComposite(self, probability_threshold, min_area_pix, set_as_composite= False, write_fits = True):
+    def applyProbabilityThresholdAndSkeletonize(self, probability_threshold, min_area_pix, write_fits = True):
 
         """
-        Given the blurred composite, threshold the image, skeletonize, remove junctions, and remove small areas. 
+        Given the blurred composite, threshold the image. 
 
         Parameters:
         - probability_threshold (float): Minimum percentage between 0 and 1 that a pixel must have in order for it to be considered "real". 
-        - min_area_pix (int): Minimum area in pixels that a box surrounding a filament must cover. 
-        -set_as_composite (bool): set the new image as the composite image. Overrides the blurred image as the composite. Set to false to test many probability thresholds at once. 
-        write_fits (bool): Save the cleaned composite as a fits file
+        - min_area_pix (int): minimum area in pixels a filament must occupy. 
+        - write_fits (bool): Save the cleaned composite as a fits file
+
+        Returns: 
+        - skelComposite (float): Thresholded data
         """
+                
+        #threshold
+        ProbabilityThresh = np.max(self.Composite)*probability_threshold
+        ret, threshComposite = cv2.threshold(self.Composite, ProbabilityThresh, 255, cv2.THRESH_BINARY)
 
         #threshold
         ProbabilityThresh = np.max(self.Composite)*probability_threshold
@@ -872,7 +878,50 @@ class FilamentMap:
 
         #skeltonize
         skelComposite = skeletonize(threshComposite)
+        skelComposite = skelComposite.astype(np.uint8)
+
+        #remove small filaments
+        img = np.array(skelComposite)
+        labels, stats, num_labels = AF.identify_connected_components(np.array(skelComposite))
+        small_areas = AF.sort_label_id(num_labels, stats, min_area_pix)
+        for label_id in small_areas:
+
+            # Extract the bounding box coordinates
+            left = stats[label_id, cv2.CC_STAT_LEFT]
+            top = stats[label_id, cv2.CC_STAT_TOP]
+            width = stats[label_id, cv2.CC_STAT_WIDTH]
+            height = stats[label_id, cv2.CC_STAT_HEIGHT]
+
+            for x in range(width):
+                for y in range(height):
+                    img[top:top+height, left:left+width] = 0
+
+        skelComposite = img.astype(np.uint8)
+
+        if write_fits:   
+            output_directory = fr"{self.BaseDir}\{self.Label}\Composites"
+            output_name = fr"{self.FitsFile}_Composite_{probability_threshold}"
+            output_fits_path = os.path.join(output_directory, output_name + '.fits')
+            hdu = fits.PrimaryHDU(data=skelComposite, header=self.OrigHeader)
+            hdu.writeto(output_fits_path, overwrite=True)
+
         
+        return skelComposite
+
+    def removeJunctions(self, skelComposite, probability_threshold, min_area_pix, set_as_composite= False, write_fits = True):
+
+        """
+        Given the thresholded composite, remove junctions and remove small areas. 
+
+        Parameters:
+        -skelComposite (float): skeletonized data to remove junctions and small filaments from
+        - probability_threshold (float): Minimum percentage between 0 and 1 that a pixel must have in order for it to be considered "real". 
+        - min_area_pix (int): Minimum area in pixels that a box surrounding a filament must cover. 
+        -set_as_composite (bool): set the new image as the composite image. Overrides the blurred image as the composite. Set to false to test many probability thresholds at once. 
+        write_fits (bool): Save the cleaned composite as a fits file
+        """
+
+
         #remove junctions
         junctions = AF.getSkeletonIntersection(np.array(255*skelComposite))
         IntersectsRemoved = AF.removeJunctions(junctions, skelComposite, dot_size = 3)
@@ -898,7 +947,7 @@ class FilamentMap:
 
         if write_fits:   
             output_directory = fr"{self.BaseDir}\{self.Label}\Composites"
-            output_name = fr"{self.FitsFile}_Composite_{probability_threshold}"
+            output_name = fr"{self.FitsFile}_Composite_{probability_threshold}_JR"
             output_fits_path = os.path.join(output_directory, output_name + '.fits')
             hdu = fits.PrimaryHDU(data=img, header=self.OrigHeader)
             hdu.writeto(output_fits_path, overwrite=True)
@@ -985,7 +1034,9 @@ class FilamentMap:
         with fits.open(fits_path, ignore_missing=True) as hdul:
             inData = np.array(hdul[0].data)  # Assuming the image data is in the primary HDU
 
-        intensity_skel = self.Composite * inData
+        thresholded_image = np.where(self.Composite > 0, 1, 0)
+        intensity_skel = thresholded_image * inData
+
         struct_width = self.Scale.replace('pc',"")
         struct_width = float(struct_width)
 
@@ -994,7 +1045,9 @@ class FilamentMap:
         # Calculate sigma for Gaussian convolution
         sigma = structure_width_pixels / 2.355  # FWHM = 2.355 * sigma -> sigma = FWHM / 2.355
         blurred_image = gaussian_filter(intensity_skel, sigma=sigma)        
-
+        blurred_image[blurred_image > 65535] = 65535
+        blurred_image = blurred_image.astype(np.uint16)
+        
         plt.figure(figsize=(8, 6))
         plt.imshow(blurred_image)
         plt.title(f'Synthetic Filament Map')
