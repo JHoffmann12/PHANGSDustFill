@@ -33,10 +33,15 @@ def getInfo(label, csv_path):
 
     """
 
+    print(label)
     table = pd.read_excel(csv_path)
+    label, band = label.split("_")
 
     try: 
-        label_info = table[table['label'].str.lower() == label.lower()]
+        label_info = table[
+            (table['label'].str.lower() == label.lower()) & 
+            (table['Band'].str.lower() == band.lower())
+        ]
     except KeyError as e:
         print("Error: Cannot find 'label' in csv file")
         exit(1)
@@ -49,7 +54,7 @@ def getInfo(label, csv_path):
         max_power = label_info.iloc[0]['Power of 2 max']
         return distance, res, pixscale, min_power, max_power
     else: 
-        print("Galaxy not found in csv!")
+        print("Image not found in csv!")
 
 
  
@@ -134,27 +139,26 @@ def CreateSNRPlot(FilamentMapList, base_dir, percentile, write = False):
     plt.close()
 
 
-def createDirectoryStructure(base_directory, csv_path):
-
+def createDirectoryStructure(base_directory, csv_path): 
     """
-    Creates the directiry structure as described in the ReadME. Subfolders are created on images present in the "OriginalImages" fodler. 
+    Creates the directory structure as described in the ReadME. Subfolders are created based on images present in the "OriginalImages" folder. 
 
     Parameters:
-    - base_directory (str): path to the base directory for which all subfolders and files will be held
-    - csv_path (str): Path to the csv file containing image information
+    - base_directory (str): Path to the base directory for which all subfolders and files will be held.
+    - csv_path (str): Path to the CSV file containing image information.
     """
 
     folder_path = os.path.join(base_directory, "OriginalImages")
     os.makedirs(base_directory, exist_ok=True)  # Ensure the root directory exists
-    figures_folder = os.path.join(base_directory, "Figures") #make the figures folder
+    figures_folder = os.path.join(base_directory, "Figures")  # Make the figures folder
     os.makedirs(figures_folder, exist_ok=True)
 
     # Iterate through all FITS files in the folder and create the needed subfolders
     for filename in os.listdir(folder_path):
 
         if filename.endswith('.fits'):
-            # Extract the galaxy name using regex
-            match = re.match(r"(.*?)_.*?\.fits", filename)
+            # Extract the label including the first underscore but not the second
+            match = re.match(r"(.*?_.+?)_.*?\.fits", filename)
 
             if match:
                 label = match.group(1)
@@ -166,7 +170,7 @@ def createDirectoryStructure(base_directory, csv_path):
                 subfolders = [
                     "CDD", "Composites", "BlockedPng", "SyntheticMap", "SoaxOutput", "BkgSubDivRMS"
                 ]
-                _, _, _, min_power, max_power = getInfo(label, csv_path) #get relevant information for image
+                _, _, _, min_power, max_power = getInfo(label, csv_path)  # Get relevant information for the image
 
                 soax_subfolders = []
                 for i in range(min_power, max_power + 1):
@@ -182,7 +186,6 @@ def createDirectoryStructure(base_directory, csv_path):
                             os.makedirs(os.path.join(subfolder_path, soax_subfolder), exist_ok=True)
 
                 print(f"Directory structure created for galaxy: {label}")
-
 
 
 def clearAllFiles(base_directory, csv_path, param_file_path):
@@ -241,38 +244,41 @@ def renameFitsFiles(base_dir, csv_path):
 
         # Extract the galaxy name from the FITS filename (assumes galaxy is the first part before the underscore)
         filename = os.path.basename(fits_file)
-        galaxy_match = re.match(r'([^_]+)', filename)
-        
-        if galaxy_match:
-            galaxy_name = galaxy_match.group(1)
-            
-            # Find the row in the Excel file corresponding to the galaxy
 
-            try: 
-                galaxy_info = table[table['label'].str.lower() == galaxy_name.lower()]
-            except KeyError as e:
+        # Match the pattern to extract label and band
+        match = re.match(r"([^_]+)_([^_]+)", filename)
+        
+        if match:
+            label = match.group(1)  # Extract label (before the first underscore)
+            band = match.group(2)   # Extract band (after the first underscore)
+
+        try: 
+            label_info = table[
+                (table['label'].str.lower() == label.lower()) & 
+                (table['Band'].str.lower() == band.lower())]
+        except KeyError as e:
                 print("Error: Cannot find 'label' in csv file")
                 exit(1)
     
-            if not galaxy_info.empty:
-                telescope = galaxy_info.iloc[0]['Telescope']
-                band = galaxy_info.iloc[0]['Band']
-                
-                # Check if 'starsub' is in the original filename
-                if "starsub" in filename.lower():
-                    new_filename = f"{galaxy_name}_{telescope}_{band}_starsub.fits"
-                else:
-                    new_filename = f"{galaxy_name}_{telescope}_{band}.fits"
-
-                new_filepath = os.path.join(fits_file_folder_path, new_filename)
-
-                # Rename the file (ensure the full paths are used)
-                os.rename(full_file_path, new_filepath)
-                print(f"Renamed {filename} to {new_filename}")
+        if not label_info.empty:
+            telescope = label_info.iloc[0]['Telescope']
+            band = label_info.iloc[0]['Band']
+            
+            # Check if 'starsub' is in the original filename
+            if "starsub" in filename.lower():
+                new_filename = f"{label}_{band}_{telescope}_starsub.fits"
             else:
-                print(f"Galaxy '{galaxy_name}' not found in Excel file.")
+                new_filename = f"{label}_{band}_{telescope}.fits"
+
+            new_filepath = os.path.join(fits_file_folder_path, new_filename)
+
+            # Rename the file (ensure the full paths are used)
+            os.rename(full_file_path, new_filepath)
+            print(f"Renamed {filename} to {new_filename}")
         else:
-            print(f"Could not extract galaxy name from {filename}")
+            print(f"Nnot found in Excel file.")
+    else:
+        print(f"Could not extract galaxy name from {filename}")
 
     print("Renaming process completed.")
 

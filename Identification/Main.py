@@ -11,7 +11,6 @@ import numpy as np
 import os
 import time
 from astropy.io import fits
-
 matplotlib.use('Agg')
 
 
@@ -52,7 +51,7 @@ if __name__ == "__main__":
         if not os.path.isdir(label_folder_path):  # Skip if it's not a directory
             continue
 
-        if(label != 'OriginalMiriImages' and label != "Figures" and label == "ngc0628"): 
+        if(label != 'OriginalMiriImages' and label != "Figures" and "ngc0628" in label): 
 
             distance_Mpc,res, pixscale, min_power, max_power = mainFuncs.getInfo(label, csv_path) #get relevant information for image from csv file
             Modified_Constrained_Diffusion.decompose(label_folder_path, base_dir, label, distance_Mpc, res, pixscale, min_power, max_power) #decompose into scales
@@ -66,13 +65,13 @@ if __name__ == "__main__":
                 filMap.runSoaxThreads(min_snake_length_ss, min_fg_int, batch_path) #Create 10 soax FITS files
                 filMap.createComposite(write_fits = True) #Combine all 10 Fits files
                 filMap.blurComposite(set_blur_as_prob = True, write_fits = True) #Blur the composite
-                filMap.applyIntensityThreshold(min_intensity) #remove filaments below min_intensity in the CDD image
-                skelData = filMap.applyProbabilityThresholdAndSkeletonize(probability_threshold = probability_threshold, min_area_pix = min_area_pix, write_fits = True)
-                filMap.removeJunctions(skelData, probability_threshold, min_area_pix, set_as_composite= False, write_fits = True)
+                # filMap.applyIntensityThreshold(min_intensity) #remove filaments below min_intensity in the CDD image
+                # skelData = filMap.applyProbabilityThresholdAndSkeletonize(probability_threshold = probability_threshold, min_area_pix = min_area_pix, write_fits = True)
+                # filMap.removeJunctions(skelData, probability_threshold, min_area_pix, set_as_composite= False, write_fits = True)
 
                 #Extra plots
                 # filMap.getProbIntensityPlot(use_orig_img = False, write_fig = True) #Compares probability vs intensity
-                # filMap.getSyntheticFilamentMap(write_fits = True) # Creates a synthetic map of all filaments at a single scale. set_as_composite = True. 
+                filMap.getSyntheticFilamentMap(write_fits = True) # Creates a synthetic map of all filaments at a single scale. set_as_composite = True. 
                 # filMap.getNoiseLevelsHistogram(noise_min = noise_min, write_fig = True)  # Histogram of calculated noise
                 # filMap.getFilamentLengthHistogram(probability_threshold = probability_threshold, write_fig = True) # Histogram of filament length in pixels
 
@@ -85,4 +84,7 @@ if __name__ == "__main__":
     print(f'FilPHANGS took: {hours:02d}:{minutes:02d}:{seconds:02d} in total')
 
 
-
+# Notes: 1) FInd the maximum value in blurred image to base probability threshold off of. 
+#        2) Work on mass/length 
+#        3) Min area to min length, junction removal?
+#        4) Local histogram equalization to account for bright sources

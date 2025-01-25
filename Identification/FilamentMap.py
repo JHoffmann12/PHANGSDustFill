@@ -484,7 +484,6 @@ class FilamentMap:
             
         print("starting Soax")
         cmdString = f'"{batch}" soax -i "{input_image}" -p "{self.ParamFile}" -s "{output_dir}" --ridge {ridge_start} 0.0075 {ridge_stop} --stretch {stretch_start} 0.5 {stretch_stop}' #can update ridge and stretch later
-        
         with open(os.devnull, 'w') as devnull:
             subprocess.run(cmdString, shell=True, stdout=devnull, stderr=devnull) #supress output from threads because its garbage
 
@@ -1027,7 +1026,6 @@ class FilamentMap:
         - write_fits (bool): Save the map as a fits file
         """
 
-
         fits_path = os.path.join(self.BaseDir, self.Label)
         fits_path = os.path.join(fits_path, "CDD")
         fits_path = os.path.join(fits_path, self.FitsFile + ".fits")
@@ -1036,26 +1034,27 @@ class FilamentMap:
 
         thresholded_image = np.where(self.Composite > 0, 1, 0)
         intensity_skel = thresholded_image * inData
+        assert(np.max(intensity_skel) <= np.max(inData))
+        assert(np.max(thresholded_image) == 1)
 
-        struct_width = self.Scale.replace('pc',"")
-        struct_width = float(struct_width)
+        #Blurr if composite is skeletonized 
+        # struct_width = self.Scale.replace('pc',"")
+        # struct_width = float(struct_width)
 
-        # Convert structure width from parsecs to pixels
-        structure_width_pixels = struct_width / self.Scalepix
-        # Calculate sigma for Gaussian convolution
-        sigma = structure_width_pixels / 2.355  # FWHM = 2.355 * sigma -> sigma = FWHM / 2.355
-        blurred_image = gaussian_filter(intensity_skel, sigma=sigma)        
-        blurred_image[blurred_image > 65535] = 65535
-        blurred_image = blurred_image.astype(np.uint16)
-        
-        plt.figure(figsize=(8, 6))
-        plt.imshow(blurred_image)
-        plt.title(f'Synthetic Filament Map')
-        os.makedirs(f"{self.BaseDir}\SyntheticMap", exist_ok=True)
-        save_path = os.path.join(f"{self.BaseDir}\{self.Label}\SyntheticMap", f"SyntheticMap_{self.Scale}.fits")
+        # # Convert structure width from parsecs to pixels
+        # structure_width_pixels = struct_width / self.Scalepix
+        # # Calculate sigma for Gaussian convolution
+        # sigma = structure_width_pixels / 2.355  # FWHM = 2.355 * sigma -> sigma = FWHM / 2.355
+        # blurred_image = gaussian_filter(intensity_skel, sigma=sigma)        
+        # blurred_image[blurred_image > 65535] = 65535
+        # blurred_image = blurred_image.astype(np.uint16)
+        # assert(np.max(blurred_image <= np.max(inData)))
+        # print(f"final synthetic max: {np.max(blurred_image)}")
 
+
+        save_path = os.path.join(f"{self.BaseDir}\{self.Label}\SyntheticMap", f"SyntheticMap_{self.Label}_{self.Scale}.fits")
         if write_fits:
-            hdu = fits.PrimaryHDU(blurred_image, header=self.OrigHeader)
+            hdu = fits.PrimaryHDU(intensity_skel, header=self.OrigHeader)
             hdu.writeto(save_path, overwrite=True)
 
 
