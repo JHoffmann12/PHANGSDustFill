@@ -20,7 +20,25 @@ from scipy.ndimage import gaussian_filter
 from skimage import color
 from skimage import data
 from skimage.filters import frangi, hessian, meijering, sato
-
+import imageio
+import numpy as np
+import matplotlib.pyplot as plt
+from astropy.io import fits
+from astropy.table import Table
+from skimage.morphology import disk, binary_dilation
+from skimage.restoration import inpaint
+from skimage import color
+from os import path
+from skimage import data
+from skimage.filters import meijering, sato, frangi, hessian
+import matplotlib
+from skimage.util.dtype import dtype_range
+from skimage.util import img_as_ubyte
+from skimage import exposure
+from skimage.morphology import disk
+from skimage.morphology import ball
+from skimage.filters import rank
+import copy 
 
 plt.rcParams['figure.figsize'] = [15, 15]
 
@@ -116,6 +134,8 @@ def decompose(label_folder_path, base_dir, label, distance_mpc, res, pixscale, m
                         header_in['NAXIS2'] = image_in.shape[0]
 
             hdu.info()
+
+        # image_in =  extinctionEqualization(imagepath, image_in) #equalize if an extinction image
 
         pix_pc=4.848*pixscale*distance_mpc # convert to parcecs per pixel
     
@@ -227,3 +247,37 @@ def decompositionExists(base_path):
     else:
         print(f"The folder 'CDD' is not empty in {base_path}.")
         return True
+    
+
+def extinctionEqualization(fits_file, image):
+
+    if 'Extinction' in fits_file: 
+
+        maskfoot=(image!=image[0,0])
+
+        n = 2
+        scale = 65535/n
+
+        imagemax=np.max(image)
+        imagemin=np.min(image)
+        image= scale-((image-imagemin)*scale/(imagemax-imagemin))
+        image[image> scale]= scale
+        image[image<0.]=0.
+        image=image.astype('uint16')
+
+        # Equalization
+        # scale increase/decrease doesn't change run time
+        radius =  int(.0175*np.min((np.shape(image)[0], np.shape(image)[1]))) * 2 + 1 #Make box 2% of smaller image dimension...appears to work well
+        #make the radius 2 * extracted_scale
+        footprint = disk(radius)  # disk of radius for local hist.eq
+
+        img_eq = rank.equalize(image, footprint, mask=maskfoot)
+        
+        outhdu = fits.PrimaryHDU(data=img_eq)
+        out_path = r"C:\Users\HP\Documents\JHU_Academics\Research\FilPHANGS\ngc2090_F555W\BkgSubDivRMS\HistEq_ngc2090.fits"
+
+        outhdu.writeto(out_path ,overwrite=True)
+        return img_eq
+
+    else: 
+        return image

@@ -57,8 +57,7 @@ def getInfo(label, csv_path):
         print("Image not found in csv!")
 
 
- 
-def setUpGalaxy(base_dir, label_folder_path,  label, distance_Mpc, res, pixscale, param_file_path, noise_min, flatten_perc): 
+def setUpGalaxy(base_dir, label_folder_path,  label, distance_Mpc, res, pixscale, param_file_path, noise_min, flatten_perc, min_intensity): 
 
     """
     Constructs a filament map object for each scale decomposed image of a label/celestial object. 
@@ -74,6 +73,7 @@ def setUpGalaxy(base_dir, label_folder_path,  label, distance_Mpc, res, pixscale
     - param_file_path (float): Path to the file containing the soax parameters
     - noise_min (float): minimum noise to be considered realistic in the image
     - flatten_perc (str): Percentage to use in the arctan transform
+    - min_intensity (float): Minimum intensity in original image for valid pixel
     
     Returns:
     - FilamentMapList (Filament Map): returns a list of the filament map objects for each scale of an image. 
@@ -88,13 +88,12 @@ def setUpGalaxy(base_dir, label_folder_path,  label, distance_Mpc, res, pixscale
 
         if(fits_file.endswith(".fits")): 
             ScalePix = pixscale * 4.848 * distance_Mpc  #convert to parcecs per pixel
-            filMap = FilamentMap.FilamentMap(ScalePix, base_dir, label_folder_path, fits_file, label, param_file_path, flatten_perc) #create object
+            filMap = FilamentMap.FilamentMap(ScalePix, base_dir, label_folder_path, fits_file, label, param_file_path, flatten_perc, min_intensity) #create object
             filMap.setBlockData() #set the blocked data
             filMap.setBkgSubDivRMS(noise_min) #set the background subtracted and noise divided data
             FilamentMapList.append(filMap) 
 
     return FilamentMapList
-
 
 
 def CreateSNRPlot(FilamentMapList, base_dir, percentile, write = False):
@@ -263,12 +262,13 @@ def renameFitsFiles(base_dir, csv_path):
         if not label_info.empty:
             telescope = label_info.iloc[0]['Telescope']
             band = label_info.iloc[0]['Band']
+            type = label_info.iloc[0]['Image_Type']
             
             # Check if 'starsub' is in the original filename
             if "starsub" in filename.lower():
-                new_filename = f"{label}_{band}_{telescope}_starsub.fits"
+                new_filename = f"{label}_{band}_{telescope}_{type}_starsub.fits"
             else:
-                new_filename = f"{label}_{band}_{telescope}.fits"
+                new_filename = f"{label}_{band}_{telescope}_{type}.fits"
 
             new_filepath = os.path.join(fits_file_folder_path, new_filename)
 
