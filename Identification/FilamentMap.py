@@ -25,18 +25,34 @@ from astropy.wcs import WCS
 from glob import glob
 from matplotlib.colors import Normalize
 from photutils.background import Background2D, MedianBackground
-from reproject import reproject_exact
+from reproject import reproject_exact, reproject_adaptive, reproject_interp
 from scipy.ndimage import gaussian_filter, zoom
 from scipy.stats import kde, lognorm
 from skimage import measure
 from skimage.morphology import skeletonize
+import imageio
+from astropy.table import Table
+from skimage.morphology import disk, binary_dilation
+from skimage.restoration import inpaint
+from skimage import color
+from os import path
+from skimage import data
+from skimage.filters import meijering, sato, frangi, hessian
+import matplotlib
+from skimage.util.dtype import dtype_range
+from skimage.util import img_as_ubyte
+from skimage import exposure
+from skimage.morphology import disk
+from skimage.morphology import ball
+from skimage.filters import rank
+from scipy.ndimage import uniform_filter
 
 matplotlib.use('Agg')
 
 
 class FilamentMap:
 
-    def __init__(self,  scalepix, base_dir, label_folder_path, fits_file, label, param_file_path, flatten_perc):
+    def __init__(self,  scalepix, base_dir, label_folder_path, fits_file, label, param_file_path, flatten_perc, min_intensity):
 
         '''
         Filament Map Constructor.
@@ -57,11 +73,32 @@ class FilamentMap:
 
         with fits.open(fits_path, ignore_missing=True) as hdul:
             OrigData = np.array(hdul[0].data)  # Assuming the image data is in the primary HDU
+            print(f'origData type 0: {type(OrigData)}')
 
-            OrigData = self.preprocessImage(OrigData, flatten_percent = flatten_perc)
+            # OrigData = self.extinctionEqualization(fits_file, OrigData, scalepix, hdul[0].header)
+            OrigData = self.preprocessImage(OrigData, fits_file, flatten_percent = flatten_perc)
+            print(f'origData type 1: {type(OrigData)}')
 
             OrigData = np.nan_to_num(OrigData, nan=0.0)  # Replace NaNs with 0
             OrigHeader = hdul[0].header
+
+
+        #get original image
+        input_dir = fr"{base_dir}\OriginalImages"
+        for file_name in os.listdir(input_dir):
+            file_name_without_extension = os.path.splitext(file_name)[0]
+            print(f'file in og: {file_name_without_extension}, {fits_file}')
+            if file_name_without_extension in fits_file:
+                input_path = os.path.join(input_dir, file_name)
+
+        print(f' input path: {input_path}')
+        with fits.open(input_path) as hdu:
+            hdu.info()
+            img=hdu[0].data #add error handling for img = hdu[1].data
+
+        print(f' img type: {type(img)}. origData type: {type(OrigData)}')
+
+        OrigData[img < min_intensity] = 0
 
         self.Label = label
         self.ProbabilityMap = np.zeros_like(OrigData)
@@ -90,7 +127,7 @@ class FilamentMap:
 
 
 
-    def preprocessImage(self, image, skip_flatten=False, flatten_percent=None):
+    def preprocessImage(self, image, fits_file, skip_flatten=False, flatten_percent=None):
         
         '''
         Preprocess and flatten the image before running the masking routine.
@@ -103,25 +140,50 @@ class FilamentMap:
 
         '''
 
-        if skip_flatten:
-            flatten_threshold = None
-            flat_img = image
-        else:
-            # Make flattened image
-            if flatten_percent is None:
-                # Fit to a log-normal distribution
-                fit_vals = lognorm.fit(image[~np.isnan(image)])  # Fit only non-NaN values
-                median = lognorm.median(*fit_vals)
-                std = lognorm.std(*fit_vals)
-                thresh_val = median + 2 * std
-            else:
-                # Use the specified percentile to calculate threshold
-                thresh_val = np.percentile(image[~np.isnan(image)], flatten_percent)
+        if 'Extinction' in fits_file: 
+            print('Equalizing image')
+            Scale = self._getScale(fits_file)
+            Scale = Scale.replace("pc", '')
+            Scale = int(Scale)
+            maskfoot=(image!=image[0,0])
 
-            # Apply the arctan transform, ensuring that we are dividing by the threshold value
-            flat_img = thresh_val * np.arctan(image / thresh_val)
+            range = 65535/2
+
+            imagemax=np.max(image)
+            imagemin=np.min(image)
+            image=range-((image-imagemin)*range/(imagemax-imagemin))
+            image[image>range]= range
+            image[image<0.]=0.
+            image=image.astype('uint16')
+
+            # Equalization
+            radius = int(Scale * 2 + 1) #Make box 2% of smaller image dimension...appears to work well
+            #make the radius 2 * extracted_scale
+            footprint = disk(radius)  # disk of radius for local hist.eq
+            processed_img = rank.equalize(image, footprint, mask=maskfoot)
+            outhdu = fits.PrimaryHDU(data=processed_img)
+            out_path = r"C:\Users\HP\Documents\JHU_Academics\Research\FilPHANGS\ngc2090_F555W\BkgSubDivRMS\HistEq_ngc2090_1.fits"
+            outhdu.writeto(out_path ,overwrite=True)
+        else:
+            if skip_flatten:
+                flatten_threshold = None
+                flat_img = image
+            else:
+                # Make flattened image
+                if flatten_percent is None:
+                    # Fit to a log-normal distribution
+                    fit_vals = lognorm.fit(image[~np.isnan(image)])  # Fit only non-NaN values
+                    median = lognorm.median(*fit_vals)
+                    std = lognorm.std(*fit_vals)
+                    thresh_val = median + 2 * std
+                else:
+                    # Use the specified percentile to calculate threshold
+                    thresh_val = np.percentile(image[~np.isnan(image)], flatten_percent)
+
+                # Apply the arctan transform, ensuring that we are dividing by the threshold value
+                processed_img = thresh_val * np.arctan(image / thresh_val)
         
-        return flat_img
+        return processed_img
             
     def setBlockFactor(self, bf):
         self.BlockFactor = bf
@@ -297,7 +359,7 @@ class FilamentMap:
             self.BkgSubDivRMSMap = self.BlockData
 
 
-    def scaleBkgSubDivRMSMap(self, write_fits):
+    def scaleBkgSubDivRMSMap(self,  write_fits):
 
         """
         Scale the background subtracted and RMS divided image to be 16 bits
@@ -318,7 +380,6 @@ class FilamentMap:
         self.BkgSubDivRMSMap = np.array(image_data) * 65535 / topval
         self.BkgSubDivRMSMap[self.BkgSubDivRMSMap > 65535] = 65535
 
-        
         # Save a PNG for SOAX
         save_png_path = fr"{self.BaseDir}\{self.Label}\BlockedPng\{self.FitsFile}_Blocked.png"
         pngData = self.BkgSubDivRMSMap.astype(np.uint16)
@@ -342,13 +403,27 @@ class FilamentMap:
 
             #fix the blocked header
             print(f"Block factor: {self.BlockFactor} and Scale: {self.Scale}")
-            self.BlockHeader['CDELT1'] = (self.OrigHeader['CDELT1']) * self.BlockFactor
-            self.BlockHeader['CDELT2'] = (self.OrigHeader['CDELT2']) * self.BlockFactor
+            try: 
+                self.BlockHeader['CDELT1'] = (self.OrigHeader['CDELT1']) * self.BlockFactor
+                self.BlockHeader['CDELT2'] = (self.OrigHeader['CDELT2']) * self.BlockFactor
+            except KeyError:
+                    # Extract the CD values
+                CD1_1 = self.BlockHeader['CD1_1']
+                CD1_2 = self.BlockHeader['CD1_2']
+                CD2_1 = self.BlockHeader['CD2_1']
+                CD2_2 = self.BlockHeader['CD2_2']
+                
+                
+                # Add the CDELT values to the header
+                self.BlockHeader['CDELT1'] = CD1_1 * self.BlockFactor
+                self.BlockHeader['CDELT2'] = CD2_2 * self.BlockFactor
+                self.BlockHeader['CD1_1'] = CD1_1 * self.BlockFactor
+                self.BlockHeader['CD2_2'] = CD2_2 * self.BlockFactor
 
             self.BlockHeader['CRPIX1'] = (self.OrigHeader['CRPIX1']) / self.BlockFactor 
             self.BlockHeader['CRPIX2'] = (self.OrigHeader['CRPIX2']) / self.BlockFactor 
 
-            #reproject the data
+
             reprojected_data = self.reprojectWrapper(self.OrigData, self.OrigHeader, self.BlockHeader, self.BlockData)
             self.BlankRegionMask = self.reprojectWrapper(self.BlankRegionMask, self.OrigHeader,self.BlockHeader, self.BlockData)
 
@@ -1017,7 +1092,7 @@ class FilamentMap:
 
 
 
-    def getSyntheticFilamentMap(self,  write_fits = True):
+    def getSyntheticFilamentMap(self,  probability_threshold = 0, write_fits = True):
 
         """
         Create a map of estimated filaments
@@ -1032,36 +1107,56 @@ class FilamentMap:
         with fits.open(fits_path, ignore_missing=True) as hdul:
             inData = np.array(hdul[0].data)  # Assuming the image data is in the primary HDU
 
-        thresholded_image = np.where(self.Composite > 0, 1, 0)
-        intensity_skel = thresholded_image * inData
-        assert(np.max(intensity_skel) <= np.max(inData))
+
+
+        struct_width = self.Scale.replace('pc',"")
+        struct_width = float(struct_width)
+
+        # Convert structure width from parsecs to pixels
+        structure_width_pixels = struct_width / self.Scalepix
+        
+        # Calculate sigma for Gaussian convolution
+        sigma = structure_width_pixels / 2.355  # FWHM = 2.355 * sigma -> sigma = FWHM / 2.355
+
+        
+        thresholded_image = np.where(self.Composite  > probability_threshold, 1, 0)
+        skel_thresh = skeletonize(thresholded_image)
+        skel_thresh = skel_thresh.astype(np.uint16)
+        kernel_size = structure_width_pixels//2 + 1
+
+        local_avg = uniform_filter(inData.astype(np.float32), size= kernel_size, mode='reflect') * kernel_size**2
+        intensity_skel = skel_thresh * local_avg  # Keep skeleton pixels, set their value to the local average
         assert(np.max(thresholded_image) == 1)
 
-        #Blurr if composite is skeletonized 
-        # struct_width = self.Scale.replace('pc',"")
-        # struct_width = float(struct_width)
+        print(f'sigma: {sigma}')
+        # Apply Gaussian blur
+        blurred_image = gaussian_filter(intensity_skel, sigma=sigma)
 
-        # # Convert structure width from parsecs to pixels
-        # structure_width_pixels = struct_width / self.Scalepix
-        # # Calculate sigma for Gaussian convolution
-        # sigma = structure_width_pixels / 2.355  # FWHM = 2.355 * sigma -> sigma = FWHM / 2.355
-        # blurred_image = gaussian_filter(intensity_skel, sigma=sigma)        
-        # blurred_image[blurred_image > 65535] = 65535
-        # blurred_image = blurred_image.astype(np.uint16)
-        # assert(np.max(blurred_image <= np.max(inData)))
-        # print(f"final synthetic max: {np.max(blurred_image)}")
+        blurred_image = (blurred_image).astype(np.float64)  # Scale for 16-bit range
 
+        assert(np.max(blurred_image <= np.max(inData)))
+        print(f"final synthetic max: {np.max(blurred_image)}")
 
         save_path = os.path.join(f"{self.BaseDir}\{self.Label}\SyntheticMap", f"SyntheticMap_{self.Label}_{self.Scale}.fits")
+        if write_fits:
+            hdu = fits.PrimaryHDU(blurred_image, header=self.OrigHeader)
+            hdu.writeto(save_path, overwrite=True)
+        save_path = os.path.join(f"{self.BaseDir}\{self.Label}\SyntheticMap", f"SyntheticMap_skel_{self.Label}_{self.Scale}.fits")
+        if write_fits:
+            hdu = fits.PrimaryHDU(skel_thresh, header=self.OrigHeader)
+            hdu.writeto(save_path, overwrite=True)
+        save_path = os.path.join(f"{self.BaseDir}\{self.Label}\SyntheticMap", f"SyntheticMap_multiply_{self.Label}_{self.Scale}.fits")
         if write_fits:
             hdu = fits.PrimaryHDU(intensity_skel, header=self.OrigHeader)
             hdu.writeto(save_path, overwrite=True)
 
 
-
     def reprojectWrapper(self, OrigData, OrigHeader, BlockHeader, BlockData):
         start = time.time()
-        reprojected_data, _ = reproject_exact((OrigData, OrigHeader), BlockHeader, shape_out=(np.shape(BlockData)))
+        # reprojected_data, _ = reproject_exact((OrigData, OrigHeader), BlockHeader, shape_out=(np.shape(BlockData)))
+        # reprojected_data, _ = reproject_adaptive((OrigData, OrigHeader), BlockHeader, shape_out=(np.shape(BlockData)), conserve_flux = True)
+        reprojected_data, _ = reproject_interp((OrigData, OrigHeader), BlockHeader, shape_out=(np.shape(BlockData)))
+
         end = time.time()
         elapsed_time = end - start
         hours = int(elapsed_time // 3600)
@@ -1070,5 +1165,5 @@ class FilamentMap:
         print(f"Reprojection complete in {hours:02d}:{minutes:02d}:{seconds:02d} in total!")
         return reprojected_data
     
-    def applyIntensityThreshold(self, thresh):
-        self.Composite[self.OrigData < thresh] = 0
+
+   
