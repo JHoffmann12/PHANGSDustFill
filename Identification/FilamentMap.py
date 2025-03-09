@@ -1,6 +1,7 @@
 #Filament map class to produce skeletonized filament maps of astrophysical images
 
 #imports 
+from pathlib import Path
 import AnalysisFuncs as AF
 import copy
 import csv
@@ -45,7 +46,7 @@ from skimage import exposure
 from skimage.morphology import disk
 from skimage.morphology import ball
 from skimage.filters import rank
-from scipy.ndimage import uniform_filter
+from scipy.ndimage import uniform_filter, convolve
 
 matplotlib.use('Agg')
 
@@ -84,19 +85,15 @@ class FilamentMap:
 
 
         #get original image
-        input_dir = fr"{base_dir}\OriginalImages"
+        input_dir = Path(f"{base_dir}/OriginalImages")
         for file_name in os.listdir(input_dir):
             file_name_without_extension = os.path.splitext(file_name)[0]
-            print(f'file in og: {file_name_without_extension}, {fits_file}')
             if file_name_without_extension in fits_file:
                 input_path = os.path.join(input_dir, file_name)
 
-        print(f' input path: {input_path}')
         with fits.open(input_path) as hdu:
             hdu.info()
             img=hdu[0].data #add error handling for img = hdu[1].data
-
-        print(f' img type: {type(img)}. origData type: {type(OrigData)}')
 
         OrigData[img < min_intensity] = 0
 
@@ -162,7 +159,7 @@ class FilamentMap:
             footprint = disk(radius)  # disk of radius for local hist.eq
             processed_img = rank.equalize(image, footprint, mask=maskfoot)
             outhdu = fits.PrimaryHDU(data=processed_img)
-            out_path = r"C:\Users\HP\Documents\JHU_Academics\Research\FilPHANGS\ngc2090_F555W\BkgSubDivRMS\HistEq_ngc2090_1.fits"
+            out_path = Path(f"{self.BaseDir}/{self.Label}/BkgSubDivRMS/{self.FitsFile}_BkgSubDivRMS_Eq.fits") 
             outhdu.writeto(out_path ,overwrite=True)
         else:
             if skip_flatten:
@@ -303,7 +300,7 @@ class FilamentMap:
 
         plt.imshow(np.uint8(mask) * 255)
         plt.title(f"Mask of {self.Label} at {self.Scale}")
-        plt.savefig(f"{self.BaseDir}\Figures\Mask_{self.Label}_{self.Scale}.png")
+        plt.savefig(Path(f"{self.BaseDir}/Figures/Mask_{self.Label}_{self.Scale}.png"))
         plt.close()
 
         return  mask
@@ -381,14 +378,14 @@ class FilamentMap:
         self.BkgSubDivRMSMap[self.BkgSubDivRMSMap > 65535] = 65535
 
         # Save a PNG for SOAX
-        save_png_path = fr"{self.BaseDir}\{self.Label}\BlockedPng\{self.FitsFile}_Blocked.png"
+        save_png_path = Path(f"{self.BaseDir}/{self.Label}/BlockedPng/{self.FitsFile}_Blocked.png")
         pngData = self.BkgSubDivRMSMap.astype(np.uint16)
 
         cv2.imwrite(save_png_path, pngData)
 
         if(write_fits):
             print('saving bkg sub as fits')
-            out_path = fr"{self.BaseDir}\{self.Label}\BkgSubDivRMS\{self.FitsFile}_BkgSubDivRMS.fits"
+            out_path = Path(f"{self.BaseDir}/{self.Label}/BkgSubDivRMS/{self.FitsFile}_BkgSubDivRMS.fits")
             hdu = fits.PrimaryHDU(self.BkgSubDivRMSMap, header=self.BlockHeader)
             hdu.writeto(out_path, overwrite=True)
 
@@ -546,9 +543,9 @@ class FilamentMap:
         """
 
 
-        input_image = fr"{self.BaseDir}\{self.Label}\BlockedPng\{self.FitsFile}_Blocked.png"
+        input_image = Path(f"{self.BaseDir}/{self.Label}/BlockedPng/{self.FitsFile}_Blocked.png")
         batch = batch_path
-        output_dir = fr"{self.BaseDir}\{self.Label}\SOAXOutput\{self.Scale}"
+        output_dir = Path(f"{self.BaseDir}/{self.Label}/SOAXOutput/{self.Scale}")
 
         try: 
             assert(os.path.isdir(output_dir))
@@ -559,13 +556,13 @@ class FilamentMap:
             
         print("starting Soax")
         cmdString = f'"{batch}" soax -i "{input_image}" -p "{self.ParamFile}" -s "{output_dir}" --ridge {ridge_start} 0.0075 {ridge_stop} --stretch {stretch_start} 0.5 {stretch_stop}' #can update ridge and stretch later
+        print(cmdString)
         with open(os.devnull, 'w') as devnull:
             subprocess.run(cmdString, shell=True, stdout=devnull, stderr=devnull) #supress output from threads because its garbage
 
         self._convertSoaxToFits(output_dir, ridge_start) #ridge_start can be used to specify the two SOAX files created by one process
 
         print("Soax converted to Fits, Success!")
-
 
 
 
@@ -615,8 +612,8 @@ class FilamentMap:
             if(result_file.endswith('.txt') and str(ridge_start) in result_file):
                 result_file_base = os.path.splitext(result_file)[0]  # removes the .txt extension
 
-                interpolate_path = fr"{self.BaseDir}\{self.Label}\SOAXOutput\{self.Scale}\{result_file_base}.fits"
-                result_file = fr"{self.BaseDir}\{self.Label}\SOAXOutput\{self.Scale}\{result_file}"
+                interpolate_path = Path(f"{self.BaseDir}/{self.Label}/SOAXOutput/{self.Scale}/{result_file_base}.fits")
+                result_file = Path(f"{self.BaseDir}/{self.Label}/SOAXOutput/{self.Scale}/{result_file}")
                 
                 self._txtToFilaments(result_file, interpolate_path) #use new_header for WCS and blocked_data dimesnions
 
@@ -751,9 +748,9 @@ class FilamentMap:
         - write_fits (bool): Whether or not the stacked composite image should be saved
         """
 
-        output_directory = fr"{self.BaseDir}\{self.Label}\Composites"
-        directory = fr"{self.BaseDir}\{self.Label}\SOAXOutput\{self.Scale}"
-        output_name = fr"{self.FitsFile}_Composites"
+        output_directory = Path(f"{self.BaseDir}/{self.Label}/Composites")
+        directory = Path(f"{self.BaseDir}/{self.Label}/SOAXOutput/{self.Scale}")
+        output_name = Path(f"{self.FitsFile}_Composites")
         common_string = self.FitsFile
         # Ensure the output directory exists
         os.makedirs(output_directory, exist_ok=True)
@@ -920,8 +917,8 @@ class FilamentMap:
             self.ProbabilityMap = blurred_image
 
         if(write_fits):
-            output_directory = fr"{self.BaseDir}\{self.Label}\Composites"
-            output_name = fr"{self.FitsFile}_CompositeBlur"
+            output_directory = Path(f"{self.BaseDir}/{self.Label}/Composites")
+            output_name = Path(f"{self.FitsFile}_CompositeBlur")
             output_fits_path = os.path.join(output_directory, output_name + '.fits')
             hdu = fits.PrimaryHDU(data=blurred_image, header=self.OrigHeader)
             hdu.writeto(output_fits_path, overwrite=True)
@@ -973,8 +970,8 @@ class FilamentMap:
         skelComposite = img.astype(np.uint8)
 
         if write_fits:   
-            output_directory = fr"{self.BaseDir}\{self.Label}\Composites"
-            output_name = fr"{self.FitsFile}_Composite_{probability_threshold}"
+            output_directory = Path(f"{self.BaseDir}/{self.Label}/Composites")
+            output_name = Path(f"{self.FitsFile}_Composite_{probability_threshold}")
             output_fits_path = os.path.join(output_directory, output_name + '.fits')
             hdu = fits.PrimaryHDU(data=skelComposite, header=self.OrigHeader)
             hdu.writeto(output_fits_path, overwrite=True)
@@ -1020,8 +1017,8 @@ class FilamentMap:
             self.Composite = img
 
         if write_fits:   
-            output_directory = fr"{self.BaseDir}\{self.Label}\Composites"
-            output_name = fr"{self.FitsFile}_Composite_{probability_threshold}_JR"
+            output_directory = Path(f"{self.BaseDir}/{self.Label}/Composites")
+            output_name = Path(f"{self.FitsFile}_Composite_{probability_threshold}_JR")
             output_fits_path = os.path.join(output_directory, output_name + '.fits')
             hdu = fits.PrimaryHDU(data=img, header=self.OrigHeader)
             hdu.writeto(output_fits_path, overwrite=True)
@@ -1064,7 +1061,7 @@ class FilamentMap:
         plt.xlabel('Length (parcecs)')
         plt.ylabel('Frequency')
         if write_fig:
-            plt.savefig(fr"{self.BaseDir}\Figures\FilamentLengthHistogram_{self.Label}_{self.Scale}.png")
+            plt.savefig(Path(f"{self.BaseDir}/Figures/FilamentLengthHistogram_{self.Label}_{self.Scale}.png"))
 
 
 
@@ -1088,7 +1085,7 @@ class FilamentMap:
         plt.xlabel('noise')
         plt.ylabel('Frequency')
         if write_fig:
-            plt.savefig(fr"{self.BaseDir}\Figures\NoiseLevelHistogram_{self.Label}_{self.Scale}.png")
+            plt.savefig(Path(f"{self.BaseDir}/Figures/NoiseLevelHistogram_{self.Label}_{self.Scale}.png"))
 
 
 
@@ -1101,55 +1098,53 @@ class FilamentMap:
         - write_fits (bool): Save the map as a fits file
         """
 
+        #Step 1: Load CDD Image
         fits_path = os.path.join(self.BaseDir, self.Label)
         fits_path = os.path.join(fits_path, "CDD")
         fits_path = os.path.join(fits_path, self.FitsFile + ".fits")
         with fits.open(fits_path, ignore_missing=True) as hdul:
             inData = np.array(hdul[0].data)  # Assuming the image data is in the primary HDU
 
-
-
+        #Step 2: Set sigma for gaussian blur
         struct_width = self.Scale.replace('pc',"")
         struct_width = float(struct_width)
-
-        # Convert structure width from parsecs to pixels
-        structure_width_pixels = struct_width / self.Scalepix
-        
-        # Calculate sigma for Gaussian convolution
+        structure_width_pixels = struct_width / self.Scalepix  # Convert structure width from parsecs to pixels
         sigma = structure_width_pixels / 2.355  # FWHM = 2.355 * sigma -> sigma = FWHM / 2.355
-
         
-        thresholded_image = np.where(self.Composite  > probability_threshold, 1, 0)
-        skel_thresh = skeletonize(thresholded_image)
-        skel_thresh = skel_thresh.astype(np.uint16)
-        kernel_size = structure_width_pixels//2 + 1
+        #Steop 3: Prepare non blurred composite image by filling in holes and skeletonizing
+        th_img = np.where(self.Composite  > probability_threshold, 1, 0)
+        th_img = th_img.astype(np.uint8)
+        #Dilate White Pixels
+        kernel_size = 3
+        kernel = np.ones((kernel_size, kernel_size), np.uint8)
+        dilated_image = cv2.morphologyEx(th_img, cv2.MORPH_CLOSE, kernel)
+        dilated_image = skeletonize(dilated_image)
+        skel_thresh = dilated_image.astype(np.uint8)
 
-        local_avg = uniform_filter(inData.astype(np.float32), size= kernel_size, mode='reflect') * kernel_size**2
-        intensity_skel = skel_thresh * local_avg  # Keep skeleton pixels, set their value to the local average
-        assert(np.max(thresholded_image) == 1)
+        #Step 3.5: Expand skeletonized filaments to 3/5 filament length: 
+        skel_thresh = gaussian_filter(skel_thresh*255, sigma = sigma * .8) 
+        skel_thresh = np.where(skel_thresh  > 0, 1, 0)
+        skel_thresh = skel_thresh.astype(np.uint8)
 
-        print(f'sigma: {sigma}')
-        # Apply Gaussian blur
-        blurred_image = gaussian_filter(intensity_skel, sigma=sigma)
+        #Step 4: Set intensity from CDD image 
+        kernel_size = round(structure_width_pixels//2 + 1) #Set kernel size for getting average intensity in CDD Image
+        kernel = np.ones((kernel_size, kernel_size), dtype=np.float32)
+        # local_avg = uniform_filter(inData.astype(np.float32), size=kernel_size, mode='reflect')
+        intensity_skel = skel_thresh * inData # Keep skeleton pixels, set their value to the local average
+        scale_factor = np.percentile(intensity_skel, 99.9999)
 
+        # Step 5: Apply Gaussian blur and scale flux to proper range
+        # print(scale_factor)
+        blurred_image = gaussian_filter(intensity_skel, sigma=sigma*.6) 
         blurred_image = (blurred_image).astype(np.float64)  # Scale for 16-bit range
+        blurred_image = scale_factor *((blurred_image - np.min(blurred_image))/(np.max(blurred_image)- np.min(blurred_image)))
 
         assert(np.max(blurred_image <= np.max(inData)))
-        print(f"final synthetic max: {np.max(blurred_image)}")
 
-        save_path = os.path.join(f"{self.BaseDir}\{self.Label}\SyntheticMap", f"SyntheticMap_{self.Label}_{self.Scale}.fits")
+        save_path = os.path.join(Path(f"{self.BaseDir}/{self.Label}/SyntheticMap", f"SyntheticMap_{self.Label}_{self.Scale}.fits"))
         if write_fits:
             hdu = fits.PrimaryHDU(blurred_image, header=self.OrigHeader)
             hdu.writeto(save_path, overwrite=True)
-        save_path = os.path.join(f"{self.BaseDir}\{self.Label}\SyntheticMap", f"SyntheticMap_skel_{self.Label}_{self.Scale}.fits")
-        if write_fits:
-            hdu = fits.PrimaryHDU(skel_thresh, header=self.OrigHeader)
-            hdu.writeto(save_path, overwrite=True)
-        save_path = os.path.join(f"{self.BaseDir}\{self.Label}\SyntheticMap", f"SyntheticMap_multiply_{self.Label}_{self.Scale}.fits")
-        if write_fits:
-            hdu = fits.PrimaryHDU(intensity_skel, header=self.OrigHeader)
-            hdu.writeto(save_path, overwrite=True)
-
 
     def reprojectWrapper(self, OrigData, OrigHeader, BlockHeader, BlockData):
         start = time.time()

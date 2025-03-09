@@ -1,7 +1,7 @@
 #FilPHANGS Main script
 
 #imports 
-
+from pathlib import Path
 import FilamentMap
 import Modified_Constrained_Diffusion
 import mainFuncs
@@ -13,8 +13,6 @@ import time
 from astropy.io import fits
 matplotlib.use('Agg')
 
-
-
 if __name__ == "__main__":
 
     #Params to Set
@@ -22,10 +20,10 @@ if __name__ == "__main__":
 #   ____________________________________________________________________________________________
 
     #paths
-    base_dir = r"C:\Users\HP\Documents\JHU_Academics\Research\FilPHANGS"
-    csv_path = r"C:\Users\HP\Documents\JHU_Academics\Research\FilPHANGS\ImageData.xlsx"
-    param_file_path = r"C:\Users\HP\Documents\JHU_Academics\Research\FilPHANGS\SoaxParams.txt"
-    batch_path = r"C:\Users\HP\Downloads\batch_soax_v3.7.0.exe"
+    base_dir = Path("/Users/jakehoffmann/Documents/JHU_Research/FilPHANGS_Main/FilPHANGS")
+    csv_path = Path("/Users/jakehoffmann/Documents/JHU_Research/FilPHANGS_Main/FilPHANGS/ImageData.xlsx")
+    param_file_path = Path("/Users/jakehoffmann/Documents/JHU_Research/FilPHANGS_Main/FilPHANGS/SoaxParams.txt")
+    batch_path = Path("/Users/jakehoffmann/Downloads/batch_soax_v3.7.0")
     #SOAX params
     min_snake_length_ss = 25
     min_fg_int = 1638
@@ -51,7 +49,7 @@ if __name__ == "__main__":
         if not os.path.isdir(label_folder_path):  # Skip if it's not a directory
             continue
 
-        if(label != 'OriginalMiriImages' and label != "Figures" and 'F770W' in label): 
+        if(label != 'OriginalMiriImages' and label != "Figures" and 'ngc0628_F770W' in label): 
 
             distance_Mpc,res, pixscale, min_power, max_power = mainFuncs.getInfo(label, csv_path) #get relevant information for image from csv file
             Modified_Constrained_Diffusion.decompose(label_folder_path, base_dir, label, distance_Mpc, res, pixscale, min_power, max_power) #decompose into scales
@@ -64,7 +62,7 @@ if __name__ == "__main__":
                 filMap.scaleBkgSubDivRMSMap(write_fits = True)
                 filMap.runSoaxThreads(min_snake_length_ss, min_fg_int, batch_path) #Create 10 soax FITS files
                 filMap.createComposite(write_fits = True) #Combine all 10 Fits files
-                filMap.blurComposite(set_blur_as_prob = True, write_fits = True) #Blur the composite
+                # filMap.blurComposite(set_blur_as_prob = True, write_fits = True) #Blur the composite
                 # skelData = filMap.applyProbabilityThresholdAndSkeletonize(probability_threshold = probability_threshold, min_area_pix = min_area_pix, write_fits = True)
                 # filMap.removeJunctions(skelData, probability_threshold, min_area_pix, set_as_composite = True, write_fits = True)
 

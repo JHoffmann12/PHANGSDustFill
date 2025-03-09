@@ -1,6 +1,7 @@
 #Decomposes image into specified scales
 
 #imports
+from pathlib import Path
 import constrained_diffusion_decomposition_specificscales as cddss
 import matplotlib.pyplot as plt
 import numpy as np
@@ -192,9 +193,9 @@ def decompose(label_folder_path, base_dir, label, distance_mpc, res, pixscale, m
 
             if pcscales[idx] >= 1:  # Check if the value is an integer
                 pcscales[idx] = roundToNearestPowerOf2(pcscales[idx])
-                outputpath = fr"{base_dir}\{label}\CDD\{base_name}_CDDss{str(int(pcscales[idx])).rjust(4, '0')}{tag}"
+                outputpath = Path(f"{base_dir}/{label}/CDD/{base_name}_CDDss{str(int(pcscales[idx])).rjust(4, '0')}{tag}")
             else: 
-                outputpath = fr"{base_dir}\{label}\CDD\{base_name}_CDDss{str(float(pcscales[idx])).rjust(4, '0')}{tag}"
+                outputpath = Path(f"{base_dir}/{label}/CDD/{base_name}_CDDss{str(float(pcscales[idx])).rjust(4, '0')}{tag}")
 
             hduout.writeto(outputpath, overwrite=True)
             print('Image saved')
@@ -248,36 +249,3 @@ def decompositionExists(base_path):
         print(f"The folder 'CDD' is not empty in {base_path}.")
         return True
     
-
-def extinctionEqualization(fits_file, image):
-
-    if 'Extinction' in fits_file: 
-
-        maskfoot=(image!=image[0,0])
-
-        n = 2
-        scale = 65535/n
-
-        imagemax=np.max(image)
-        imagemin=np.min(image)
-        image= scale-((image-imagemin)*scale/(imagemax-imagemin))
-        image[image> scale]= scale
-        image[image<0.]=0.
-        image=image.astype('uint16')
-
-        # Equalization
-        # scale increase/decrease doesn't change run time
-        radius =  int(.0175*np.min((np.shape(image)[0], np.shape(image)[1]))) * 2 + 1 #Make box 2% of smaller image dimension...appears to work well
-        #make the radius 2 * extracted_scale
-        footprint = disk(radius)  # disk of radius for local hist.eq
-
-        img_eq = rank.equalize(image, footprint, mask=maskfoot)
-        
-        outhdu = fits.PrimaryHDU(data=img_eq)
-        out_path = r"C:\Users\HP\Documents\JHU_Academics\Research\FilPHANGS\ngc2090_F555W\BkgSubDivRMS\HistEq_ngc2090.fits"
-
-        outhdu.writeto(out_path ,overwrite=True)
-        return img_eq
-
-    else: 
-        return image
