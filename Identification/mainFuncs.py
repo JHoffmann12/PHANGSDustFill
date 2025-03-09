@@ -1,5 +1,5 @@
 #Functions not associated with a filament map object but used within the main block of FilPHANGS
-
+from pathlib import Path
 import FilamentMap
 import matplotlib
 import matplotlib.pyplot as plt
@@ -134,7 +134,7 @@ def CreateSNRPlot(FilamentMapList, base_dir, percentile, write = False):
         plt.grid(True)
 
     if write:
-        plt.savefig(f"{base_dir}\Figures\SNRPlot_{label}.png")
+        plt.savefig(Path(f"{base_dir}/Figures/SNRPlot_{label}.png"))
     plt.close()
 
 
