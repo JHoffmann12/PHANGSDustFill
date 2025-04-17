@@ -67,19 +67,17 @@ def getSkeletonIntersection(skeleton):
 
 def removeJunctions(junctions, img, dot_size):
     # Convert NumPy array to PIL Image (grayscale mode)
-    processed_img = Image.fromarray(img).convert("L")
-    draw = ImageDraw.Draw(processed_img)
-
-    # Draw black dots at each junction
+    # Make a mask of the junctions to be removed
+    mask = np.ones_like(img, dtype=bool)
     for x, y in junctions:
         x0 = max(0, x - dot_size)
         y0 = max(0, y - dot_size)
-        x1 = min(processed_img.width, x + dot_size)
-        y1 = min(processed_img.height, y + dot_size)
-        draw.ellipse((x0, y0, x1, y1), fill=0)  # Fill black (0) for grayscale
+        x1 = min(mask.shape[1], x + dot_size)
+        y1 = min(mask.shape[0], y + dot_size)
+        mask[y0:y1, x0:x1] = False  # Mask out region
     
     # Convert back to NumPy array for returning
-    return np.array(processed_img)  
+    return img * mask
 
 def identify_connected_components(image):
 
