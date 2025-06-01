@@ -62,15 +62,17 @@ if __name__ == "__main__":
                 filMap.scaleBkgSubDivRMSMap(write_fits = True)
                 filMap.runSoaxThreads(min_snake_length_ss, min_fg_int, batch_path) #Create 10 soax FITS files
                 filMap.createComposite(write_fits = True) #Combine all 10 Fits files
+                # filMap.getSyntheticFilamentMap(probability_threshold = 0, write_fits = True) # Creates a synthetic map of all filaments at a single scale from the blurred probability_map. set_as_composite = True. 
+
+
+                #Extra Processing
                 # filMap.blurComposite(set_blur_as_prob = True, write_fits = True) #Blur the composite
                 # skelData = filMap.applyProbabilityThresholdAndSkeletonize(probability_threshold = probability_threshold, min_area_pix = min_area_pix, write_fits = True)
                 # filMap.removeJunctions(skelData, probability_threshold, min_area_pix, set_as_composite = True, write_fits = True)
 
                 #Extra plots
                 # filMap.getProbIntensityPlot(use_orig_img = False, write_fig = True) #Compares probability vs intensity
-                # filMap.getSyntheticFilamentMap(probability_threshold = 0, write_fits = True) # Creates a synthetic map of all filaments at a single scale from the blurred probability_map. set_as_composite = True. 
                 # filMap.getNoiseLevelsHistogram(noise_min = noise_min, write_fig = True)  # Histogram of calculated noise
-                # filMap.getFilamentLengthHistogram(probability_threshold = probability_threshold, write_fig = True) # Histogram of filament length in pixels
 
     # Display Time information
     end = time.time()

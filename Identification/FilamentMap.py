@@ -1089,63 +1089,6 @@ class FilamentMap:
 
 
 
-    def getSyntheticFilamentMap(self,  probability_threshold = 0, write_fits = True):
-
-        """
-        Create a map of estimated filaments
-
-        Parameters:
-        - write_fits (bool): Save the map as a fits file
-        """
-
-        #Step 1: Load CDD Image
-        fits_path = os.path.join(self.BaseDir, self.Label)
-        fits_path = os.path.join(fits_path, "CDD")
-        fits_path = os.path.join(fits_path, self.FitsFile + ".fits")
-        with fits.open(fits_path, ignore_missing=True) as hdul:
-            inData = np.array(hdul[0].data)  # Assuming the image data is in the primary HDU
-
-        #Step 2: Set sigma for gaussian blur
-        struct_width = self.Scale.replace('pc',"")
-        struct_width = float(struct_width)
-        structure_width_pixels = struct_width / self.Scalepix  # Convert structure width from parsecs to pixels
-        sigma = structure_width_pixels / 2.355  # FWHM = 2.355 * sigma -> sigma = FWHM / 2.355
-        
-        #Steop 3: Prepare non blurred composite image by filling in holes and skeletonizing
-        th_img = np.where(self.Composite  > probability_threshold, 1, 0)
-        th_img = th_img.astype(np.uint8)
-        #Dilate White Pixels
-        kernel_size = 3
-        kernel = np.ones((kernel_size, kernel_size), np.uint8)
-        dilated_image = cv2.morphologyEx(th_img, cv2.MORPH_CLOSE, kernel)
-        dilated_image = skeletonize(dilated_image)
-        skel_thresh = dilated_image.astype(np.uint8)
-
-        #Step 3.5: Expand skeletonized filaments to 3/5 filament length: 
-        skel_thresh = gaussian_filter(skel_thresh*255, sigma = sigma * .8) 
-        skel_thresh = np.where(skel_thresh  > 0, 1, 0)
-        skel_thresh = skel_thresh.astype(np.uint8)
-
-        #Step 4: Set intensity from CDD image 
-        kernel_size = round(structure_width_pixels//2 + 1) #Set kernel size for getting average intensity in CDD Image
-        kernel = np.ones((kernel_size, kernel_size), dtype=np.float32)
-        # local_avg = uniform_filter(inData.astype(np.float32), size=kernel_size, mode='reflect')
-        intensity_skel = skel_thresh * inData # Keep skeleton pixels, set their value to the local average
-        scale_factor = np.percentile(intensity_skel, 99.9999)
-
-        # Step 5: Apply Gaussian blur and scale flux to proper range
-        # print(scale_factor)
-        blurred_image = gaussian_filter(intensity_skel, sigma=sigma*.6) 
-        blurred_image = (blurred_image).astype(np.float64)  # Scale for 16-bit range
-        blurred_image = scale_factor *((blurred_image - np.min(blurred_image))/(np.max(blurred_image)- np.min(blurred_image)))
-
-        assert(np.max(blurred_image <= np.max(inData)))
-
-        save_path = os.path.join(Path(f"{self.BaseDir}/{self.Label}/SyntheticMap", f"SyntheticMap_{self.Label}_{self.Scale}.fits"))
-        if write_fits:
-            hdu = fits.PrimaryHDU(blurred_image, header=self.OrigHeader)
-            hdu.writeto(save_path, overwrite=True)
-
     def reprojectWrapper(self, OrigData, OrigHeader, BlockHeader, BlockData):
         start = time.time()
         # reprojected_data, _ = reproject_exact((OrigData, OrigHeader), BlockHeader, shape_out=(np.shape(BlockData)))
@@ -1161,4 +1104,203 @@ class FilamentMap:
         return reprojected_data
     
 
-   
+    def getSyntheticFilamentMap(self, write_fits = True):
+
+        """
+        Create a map of estimated filaments
+
+        Parameters:
+        - write_fits (bool): Save the map as a fits file
+        """
+
+
+        #Step 1: Load CDD Image
+        fits_path = os.path.join(self.BaseDir, self.Label)
+        fits_path = os.path.join(fits_path, "CDD")
+        fits_path = os.path.join(fits_path, self.FitsFile + ".fits")
+        with fits.open(fits_path, ignore_missing=True) as hdul:
+            data = np.array(hdul[0].data)  # Assuming the image data is in the primary HDU
+            header = hdul[0].header
+        data[np.isnan(data)] = 0
+        odata= copy.deepcopy(data) #preserve original image
+
+
+        #Step 2: Load Composite image
+        coords_data = self.Composite
+        
+        #step 3: Set fwhmval for PSF model
+        Scale = self._getScale(fits_file)
+        Scale = Scale.replace("pc", '')
+        Scale = int(Scale)
+        fwhmval = int(Scale/self.Scalepix)
+
+        #Step 4: Apply blocking to speed up PSF fitting
+        if self.BlockFactor != 0:
+            BlockData = np.zeros((int(data.shape[0] / self.BlockFactor), int(data.shape[1] / self.BlockFactor))) 
+
+            self.BlockHeader['CDELT1'] = (header['CDELT1']) * self.BlockFactor
+            self.BlockHeader['CDELT2'] = (header['CDELT2']) * self.BlockFactor
+            self.BlockHeader['CRPIX1'] = (header['CRPIX1']) / self.BlockFactor 
+            self.BlockHeader['CRPIX2'] = (header['CRPIX2']) / self.BlockFactor 
+
+            data, _ = reproject_interp((data, header), self.BlockHeader, shape_out=(np.shape(BlockData)))
+            coords_data, _ = reproject_interp((coords_data, header), self.BlockHeader, shape_out=(np.shape(BlockData)))
+            data = self._cropNanBorder(data, np.shape(BlockData))
+            coords_data = self._cropNanBorder(coords_data, np.shape(BlockData))
+        
+        #step 5: Process the composite image
+        kernel_size = 3
+        kernel = np.ones((kernel_size, kernel_size), np.uint8)
+        dilated_image = cv2.morphologyEx(coords_data, cv2.MORPH_CLOSE, kernel)
+        dilated_image = skeletonize(dilated_image)
+        coords_data= dilated_image.astype(np.uint8)
+
+        #step 6: Define PSF 
+        psf_model = CircularGaussianPRF(flux=1, fwhm=fwhmval) #No longer divide fwhmval/2.35
+        psf_model.x_0.fixed = True #allowing this to vary when x_coords, y_coords given no intentional offset shows most would only move by ~0.125 pix, so neglect any shift
+        psf_model.y_0.fixed = True
+        psf_model.fwhm.fixed = False
+        psf_model.flux.min = 0. #### -1. * np.std(noise)  #keep all models positive
+        psf_model.fwhm.max = fwhmval * 2.0 #do not allow the fwhm to encroach into next larger single scale interval
+        psf_model.fixed
+
+        #step 7: Apply PSF to create model
+        net_scaling_factor = 3.2728865403756338
+        y_coords, x_coords = np.where(coords_data > 0)
+        init_params = QTable()
+        init_params['x'] = x_coords+0.0
+        init_params['y'] = y_coords+0.0
+        init_params['flux'] = data[coords_data>0]*net_scaling_factor
+
+        # Define PSF fitting region
+        psf_shape = (2*int(np.ceil(fwhmval)) + 1, 2*int(np.ceil(fwhmval)) + 1)
+        fit_shape = psf_shape
+        grouper = SourceGrouper(min_separation=1)
+        psfphot = PSFPhotometry(psf_model, fit_shape, grouper = grouper, fitter_maxiters = 2) # !!! 2 iterations used, could minimally explore higher but might not be needed with good guess and could lead to divergence?
+        phot = psfphot(data, error=self.NoiseMap, init_params=init_params)
+
+    
+        #model
+        resid = psfphot.make_residual_image(data)
+        model = (data - resid)  # Model is data minus residuals
+
+        #Scale model again
+        ratio=data[model != 0]/model[model != 0]
+        ratiouseful=ratio[(ratio>0.05) & (ratio<6.)]
+        ratiomean,ratiomedian,ratiostd=sigma_clipped_stats(ratiouseful, sigma=2, maxiters=5)
+        globalfactor=ratiomedian
+        model = globalfactor * model
+
+        #Project back
+        BlockData = np.zeros((int(odata.shape[0]), int(odata.shape[1]))) 
+        model, _ = reproject_interp((model, self.BlockHeader), header, shape_out=(np.shape(BlockData)))
+
+        if(write_fits):
+            out_path = Path(f"{self.BaseDir}/{self.Label}/SyntheticMap/{self.FitsFile}_SyntheticMap.fits")
+            hdu = fits.PrimaryHDU(model, header=header)
+            hdu.writeto(out_path, overwrite=True)
+
+    #_________________________________________________________________________________________________________
+        #Part 2, Density Analysis
+        
+        #Step 0: Load composite map 
+        coords_data = self.Composite #reload as non blocked version of composite 
+
+        #Step 1: Remove junctions
+        fil_centers = copy.deepcopy(coords_data)
+        junctions = AF.getSkeletonIntersection(np.array(fil_centers*255))
+        IntersectsRemoved = AF.removeJunctions(junctions, fil_centers, dot_size = 3) #check intersects removed
+        assert(np.max(IntersectsRemoved) == 1)
+        fil_centers = IntersectsRemoved
+
+        #Step 2: Create a filament dictionary 
+        segment_map = detect_sources(fil_centers, threshold=.5,   npixels=10)
+        segm_deblend = deblend_sources(fil_centers, segment_map, npixels=10, nlevels=32, contrast=0.001,progress_bar=False)
+
+        segment_info = {}
+        for label in segm_deblend.labels:
+            mask = segm_deblend.data == label # Find pixels that belong to this segment
+            coords = np.argwhere(mask)  # shape (N, 2), where each entry is (y, x)
+
+            num_pixels = coords.shape[0]  # total number of pixels in this filament
+
+            pixel_list = []
+            for (y, x) in coords:
+                pixel_value = data[y, x]  # value from the original image
+                pixel_list.append((x, y, pixel_value, num_pixels))  # (x, y, value, Npix)
+
+            segment_info[label] = pixel_list
+
+            #step 3: Set partameters for Density Calculations
+            inclination = 9 * np.pi / 180  # Inclination in radians
+            sSFR = 1.74 #get specific SFR*
+            pc_pix = 5.24
+            x_fit = phot['x_fit']
+            y_fit = phot['y_fit']
+            flux_fit = phot['flux_fit']
+
+            # Step 4:Create a 2D map to associate flux values with filament spine pixels
+            flux_map = np.zeros_like(model, dtype=float)
+            for x, y, f in zip(x_fit.astype(int), y_fit.astype(int), flux_fit):
+                flux_map[y, x] = f  # Note: numpy image convention is (row=y, col=x)
+
+            I_F770W_16pc = flux_map*globalfactor
+
+            # Step 5: Extract Density and mass
+            I_F770W_16pc = I_F770W_16pc * np.cos(np.radians(inclination))
+            log_C_F770W = -0.21 * (np.log10(sSFR) + 10.14)  
+            valid_mask_1 = I_F770W_16pc > 0
+            x = np.zeros_like(I_F770W_16pc)
+            x[valid_mask_1] = np.log(I_F770W_16pc[valid_mask_1]) - log_C_F770W
+            log_I_CO_2_1_16pc = 0.88 * (x - 1.44) + 1.36
+            I_CO__2_1_16pc = 10**log_I_CO_2_1_16pc
+            I_CO__2_1_16pc[~valid_mask_1] = 0
+            Molecular_Mass = 5.5 * I_CO__2_1_16pc #Units of Solar mass per pix^2
+
+            #step 6: Save Data
+            csv_data = {}
+
+            Line_Density = []
+            Lengths = []
+            Mass = []
+
+            for fil_id, pix_list in segment_info.items():
+                mass_sum = []
+                fil_length = len(pix_list)
+                img = np.zeros_like(Molecular_Mass)
+                centers_mask = np.zeros_like(Molecular_Mass)
+
+                x_coords = []
+                y_coords = []
+
+                for values in pix_list:
+                    x = values[0]
+                    y = values[1]
+                    mass_sum.append(Molecular_Mass[y, x])
+                    img[y, x] = Molecular_Mass[y, x]
+                    centers_mask[y, x] = 1
+                    x_coords.append(x)
+                    y_coords.append(y)
+
+                Line_Density.append(np.sum(mass_sum) / (5.24 * fil_length))
+                Lengths.append(5.24 * fil_length)
+                Mass.append(np.sum(mass_sum))
+
+            # Store in dictionary with scale-specific column names
+            csv_data[f'Line_Density_{Scale}'] = Line_Density
+            csv_data[f'Length_{Scale}'] = Lengths
+            csv_data[f'Mass_{Scale}'] = Mass
+
+        # Convert to DataFrame
+        df = pd.DataFrame(csv_data)
+
+        # Save to CSV
+        out_path = Path(f"{self.BaseDir}/{self.Label}/SyntheticMap/{self.FitsFile}_DensityData.csv")
+        df.to_csv(out_path, index=False)
+
+
+
+
+
+
+
