@@ -20,10 +20,15 @@ if __name__ == "__main__":
 #   ____________________________________________________________________________________________
 
     #paths
-    base_dir = Path("/Users/jakehoffmann/Documents/JHU_Research/FilPHANGS_Main/FilPHANGS")
-    csv_path = Path("/Users/jakehoffmann/Documents/JHU_Research/FilPHANGS_Main/FilPHANGS/ImageData.xlsx")
-    param_file_path = Path("/Users/jakehoffmann/Documents/JHU_Research/FilPHANGS_Main/FilPHANGS/SoaxParams.txt")
-    batch_path = Path("/Users/jakehoffmann/Downloads/batch_soax_v3.7.0")
+    # base_dir = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data")
+    # csv_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data\ImageData.xlsx")
+    # param_file_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data\SoaxParams.txt")
+    # batch_path = Path(r"C:\Users\jhoffm72\Downloads\batch_soax_v3.7.0.exe")
+    base_dir = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data")
+    csv_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data\ImageData.xlsx")
+    param_file_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data\SoaxParams.txt")
+    batch_path = Path(r"C:\Users\jhoffm72\Downloads\batch_soax_v3.7.0.exe")
+
     #SOAX params
     min_snake_length_ss = 25
     min_fg_int = 1638
@@ -62,8 +67,7 @@ if __name__ == "__main__":
                 filMap.scaleBkgSubDivRMSMap(write_fits = True)
                 filMap.runSoaxThreads(min_snake_length_ss, min_fg_int, batch_path) #Create 10 soax FITS files
                 filMap.createComposite(write_fits = True) #Combine all 10 Fits files
-                # filMap.getSyntheticFilamentMap(probability_threshold = 0, write_fits = True) # Creates a synthetic map of all filaments at a single scale from the blurred probability_map. set_as_composite = True. 
-
+                filMap.getSyntheticFilamentMap( write_fits = True) # Creates a synthetic map of all filaments at a single scale from the blurred probability_map. set_as_composite = True. 
 
                 #Extra Processing
                 # filMap.blurComposite(set_blur_as_prob = True, write_fits = True) #Blur the composite
@@ -73,6 +77,7 @@ if __name__ == "__main__":
                 #Extra plots
                 # filMap.getProbIntensityPlot(use_orig_img = False, write_fig = True) #Compares probability vs intensity
                 # filMap.getNoiseLevelsHistogram(noise_min = noise_min, write_fig = True)  # Histogram of calculated noise
+                # filMap.getFilamentLengthHistogram(probability_threshold = probability_threshold, write_fig = True) # Histogram of filament length in pixels
 
     # Display Time information
     end = time.time()
@@ -81,20 +86,3 @@ if __name__ == "__main__":
     minutes = int((elapsed_time % 3600) // 60)
     seconds = int(elapsed_time % 60)
     print(f'FilPHANGS took: {hours:02d}:{minutes:02d}:{seconds:02d} in total')
-
-
-#        1) Correct synthetic maps sharp****
-#           --> Skeeltonize probability thresholded map, blow up to ~3 pix radius filament and take pixel value from 
-#           the CDD image, then convolve to filament scale... Check the normalization of convolution 
-#           update: Scaling issues after blurr and skeltonization issues due to width of filaments after thresholding
-#        2) Min area to min length, junction removal
-#        3) Find the maximum value in blurred image to base probability threshold off of. 
-#        4) Work on mass/length****
-# Draw a red box on the image the size of the bkg sub map box
-
-#complete but can revisit: 
-#       1) Attenuation: 
-#           steps: 1) Decompose. 2) Hist eq based on scale and radius based on 2*decomposed scale. 
-#           Include 8pc image to imprve other blocking scales
-#           --> Works better this way
-#           see if 8pc SNR map can be recovered well*

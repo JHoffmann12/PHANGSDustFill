@@ -47,6 +47,21 @@ from skimage.morphology import disk
 from skimage.morphology import ball
 from skimage.filters import rank
 from scipy.ndimage import uniform_filter, convolve
+from astropy.stats import sigma_clipped_stats
+from photutils.psf import CircularGaussianPRF, make_psf_model_image
+from photutils.psf import PSFPhotometry
+from photutils.psf import SourceGrouper
+from photutils.background import LocalBackground, MMMBackground
+from photutils.background import Background2D, MedianBackground
+from photutils.psf import CircularGaussianPRF, make_psf_model_image
+from photutils.psf import PSFPhotometry
+from photutils.psf import SourceGrouper
+from photutils.background import LocalBackground, MMMBackground
+from photutils.background import Background2D, MedianBackground
+from astropy.stats import sigma_clipped_stats
+from astropy.table import QTable
+from photutils.segmentation import detect_sources
+from photutils.segmentation import deblend_sources
 
 matplotlib.use('Agg')
 
@@ -801,7 +816,7 @@ class FilamentMap:
 
         # Save the grayscale composite as FITS? 
         if write_fits: 
-            output_fits_path = os.path.join(output_directory, output_name + ".fits")
+            output_fits_path = os.path.join(output_directory, str(output_name) + ".fits")
             hdu = fits.PrimaryHDU(data=composite_data, header=header)
             hdu.writeto(output_fits_path, overwrite=True)
             print(f"Composite image saved as FITS")
@@ -919,7 +934,7 @@ class FilamentMap:
         if(write_fits):
             output_directory = Path(f"{self.BaseDir}/{self.Label}/Composites")
             output_name = Path(f"{self.FitsFile}_CompositeBlur")
-            output_fits_path = os.path.join(output_directory, output_name + '.fits')
+            output_fits_path = os.path.join(output_directory, str(output_name) + '.fits')
             hdu = fits.PrimaryHDU(data=blurred_image, header=self.OrigHeader)
             hdu.writeto(output_fits_path, overwrite=True)
 
@@ -972,7 +987,7 @@ class FilamentMap:
         if write_fits:   
             output_directory = Path(f"{self.BaseDir}/{self.Label}/Composites")
             output_name = Path(f"{self.FitsFile}_Composite_{probability_threshold}")
-            output_fits_path = os.path.join(output_directory, output_name + '.fits')
+            output_fits_path = os.path.join(output_directory, str(output_name)  + '.fits')
             hdu = fits.PrimaryHDU(data=skelComposite, header=self.OrigHeader)
             hdu.writeto(output_fits_path, overwrite=True)
 
@@ -1019,7 +1034,7 @@ class FilamentMap:
         if write_fits:   
             output_directory = Path(f"{self.BaseDir}/{self.Label}/Composites")
             output_name = Path(f"{self.FitsFile}_Composite_{probability_threshold}_JR")
-            output_fits_path = os.path.join(output_directory, output_name + '.fits')
+            output_fits_path = os.path.join(output_directory, str(output_name)  + '.fits')
             hdu = fits.PrimaryHDU(data=img, header=self.OrigHeader)
             hdu.writeto(output_fits_path, overwrite=True)
     
@@ -1129,7 +1144,7 @@ class FilamentMap:
         coords_data = self.Composite
         
         #step 3: Set fwhmval for PSF model
-        Scale = self._getScale(fits_file)
+        Scale = self._getScale( self.FitsFile)
         Scale = Scale.replace("pc", '')
         Scale = int(Scale)
         fwhmval = int(Scale/self.Scalepix)
@@ -1202,18 +1217,23 @@ class FilamentMap:
 
     #_________________________________________________________________________________________________________
         #Part 2, Density Analysis
-        
+        print("Begenning Density Calculations")
         #Step 0: Load composite map 
         coords_data = self.Composite #reload as non blocked version of composite 
 
         #Step 1: Remove junctions
+        print('junctions removed')
         fil_centers = copy.deepcopy(coords_data)
         junctions = AF.getSkeletonIntersection(np.array(fil_centers*255))
         IntersectsRemoved = AF.removeJunctions(junctions, fil_centers, dot_size = 3) #check intersects removed
+        IntersectsRemoved[IntersectsRemoved > 0] = 1
+        IntersectsRemoved[IntersectsRemoved < 0] = 0
+
         assert(np.max(IntersectsRemoved) == 1)
         fil_centers = IntersectsRemoved
 
         #Step 2: Create a filament dictionary 
+        print('creating dictionary')
         segment_map = detect_sources(fil_centers, threshold=.5,   npixels=10)
         segm_deblend = deblend_sources(fil_centers, segment_map, npixels=10, nlevels=32, contrast=0.001,progress_bar=False)
 
@@ -1231,65 +1251,66 @@ class FilamentMap:
 
             segment_info[label] = pixel_list
 
-            #step 3: Set partameters for Density Calculations
-            inclination = 9 * np.pi / 180  # Inclination in radians
-            sSFR = 1.74 #get specific SFR*
-            pc_pix = 5.24
-            x_fit = phot['x_fit']
-            y_fit = phot['y_fit']
-            flux_fit = phot['flux_fit']
+        #step 3: Set partameters for Density Calculations
+        inclination = 9 * np.pi / 180  # Inclination in radians
+        sSFR = 1.74 #get specific SFR*
+        x_fit = phot['x_fit']
+        y_fit = phot['y_fit']
+        flux_fit = phot['flux_fit']
 
-            # Step 4:Create a 2D map to associate flux values with filament spine pixels
-            flux_map = np.zeros_like(model, dtype=float)
-            for x, y, f in zip(x_fit.astype(int), y_fit.astype(int), flux_fit):
-                flux_map[y, x] = f  # Note: numpy image convention is (row=y, col=x)
+        # Step 4:Create a 2D map to associate flux values with filament spine pixels
+        flux_map = np.zeros_like(model, dtype=float)
+        for x, y, f in zip(x_fit.astype(int), y_fit.astype(int), flux_fit):
+            flux_map[y, x] = f  # Note: numpy image convention is (row=y, col=x)
 
-            I_F770W_16pc = flux_map*globalfactor
+        I_F770W_16pc = flux_map*globalfactor
 
-            # Step 5: Extract Density and mass
-            I_F770W_16pc = I_F770W_16pc * np.cos(np.radians(inclination))
-            log_C_F770W = -0.21 * (np.log10(sSFR) + 10.14)  
-            valid_mask_1 = I_F770W_16pc > 0
-            x = np.zeros_like(I_F770W_16pc)
-            x[valid_mask_1] = np.log(I_F770W_16pc[valid_mask_1]) - log_C_F770W
-            log_I_CO_2_1_16pc = 0.88 * (x - 1.44) + 1.36
-            I_CO__2_1_16pc = 10**log_I_CO_2_1_16pc
-            I_CO__2_1_16pc[~valid_mask_1] = 0
-            Molecular_Mass = 5.5 * I_CO__2_1_16pc #Units of Solar mass per pix^2
+        # Step 5: Extract Density and mass
+        print('extracting density')
+        I_F770W_16pc = I_F770W_16pc * np.cos(np.radians(inclination))
+        log_C_F770W = -0.21 * (np.log10(sSFR) + 10.14)  
+        valid_mask_1 = I_F770W_16pc > 0
+        x = np.zeros_like(I_F770W_16pc)
+        x[valid_mask_1] = np.log(I_F770W_16pc[valid_mask_1]) - log_C_F770W
+        log_I_CO_2_1_16pc = 0.88 * (x - 1.44) + 1.36
+        I_CO__2_1_16pc = 10**log_I_CO_2_1_16pc
+        I_CO__2_1_16pc[~valid_mask_1] = 0
+        Molecular_Mass = 5.5 * I_CO__2_1_16pc #Units of Solar mass per pix^2
 
-            #step 6: Save Data
-            csv_data = {}
+        #step 6: Save Data
+        print('converting to csv data')
+        csv_data = {}
 
-            Line_Density = []
-            Lengths = []
-            Mass = []
+        Line_Density = []
+        Lengths = []
+        Mass = []
 
-            for fil_id, pix_list in segment_info.items():
-                mass_sum = []
-                fil_length = len(pix_list)
-                img = np.zeros_like(Molecular_Mass)
-                centers_mask = np.zeros_like(Molecular_Mass)
+        for fil_id, pix_list in segment_info.items():
+            mass_sum = []
+            fil_length = len(pix_list)
+            img = np.zeros_like(Molecular_Mass)
+            centers_mask = np.zeros_like(Molecular_Mass)
 
-                x_coords = []
-                y_coords = []
+            x_coords = []
+            y_coords = []
 
-                for values in pix_list:
-                    x = values[0]
-                    y = values[1]
-                    mass_sum.append(Molecular_Mass[y, x])
-                    img[y, x] = Molecular_Mass[y, x]
-                    centers_mask[y, x] = 1
-                    x_coords.append(x)
-                    y_coords.append(y)
+            for values in pix_list:
+                x = values[0]
+                y = values[1]
+                mass_sum.append(Molecular_Mass[y, x])
+                img[y, x] = Molecular_Mass[y, x]
+                centers_mask[y, x] = 1
+                x_coords.append(x)
+                y_coords.append(y)
 
-                Line_Density.append(np.sum(mass_sum) / (5.24 * fil_length))
-                Lengths.append(5.24 * fil_length)
-                Mass.append(np.sum(mass_sum))
+            Line_Density.append(np.sum(mass_sum) / (self.Scalepix * fil_length))
+            Lengths.append(self.Scalepix * fil_length)
+            Mass.append(np.sum(mass_sum))
 
-            # Store in dictionary with scale-specific column names
-            csv_data[f'Line_Density_{Scale}'] = Line_Density
-            csv_data[f'Length_{Scale}'] = Lengths
-            csv_data[f'Mass_{Scale}'] = Mass
+        # Store in dictionary with scale-specific column names
+        csv_data[f'Line_Density_{Scale}'] = Line_Density
+        csv_data[f'Length_{Scale}'] = Lengths
+        csv_data[f'Mass_{Scale}'] = Mass
 
         # Convert to DataFrame
         df = pd.DataFrame(csv_data)
