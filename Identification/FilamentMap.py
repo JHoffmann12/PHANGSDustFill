@@ -1220,7 +1220,8 @@ class FilamentMap:
         print("Begenning Density Calculations")
         #Step 0: Load composite map 
         coords_data = self.Composite #reload as non blocked version of composite 
-
+        data = odata 
+        
         #Step 1: Remove junctions
         print('junctions removed')
         fil_centers = copy.deepcopy(coords_data)
