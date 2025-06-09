@@ -1,6 +1,7 @@
 #Filament map class to produce skeletonized filament maps of astrophysical images
 
 #imports 
+from astropy.nddata.utils import Cutout2D
 from pathlib import Path
 import AnalysisFuncs as AF
 import copy
@@ -1136,13 +1137,14 @@ class FilamentMap:
         with fits.open(fits_path, ignore_missing=True) as hdul:
             data = np.array(hdul[0].data)  # Assuming the image data is in the primary HDU
             header = hdul[0].header
+            wcs_1 = WCS(header)
         data[np.isnan(data)] = 0
         odata= copy.deepcopy(data) #preserve original image
 
 
-        #Step 2: Load Composite image
+        # Step 2: Load Composite image
         coords_data = self.Composite
-        
+
         #step 3: Set fwhmval for PSF model
         Scale = self._getScale( self.FitsFile)
         Scale = Scale.replace("pc", '')
@@ -1170,7 +1172,41 @@ class FilamentMap:
         dilated_image = skeletonize(dilated_image)
         coords_data= dilated_image.astype(np.uint8)
 
+#____________________________________________________________________________________
+        #Step 1: Remove junctions
+        print('junctions removed')
+        fil_centers = copy.deepcopy(coords_data)
+        junctions = AF.getSkeletonIntersection(np.array(fil_centers*255))
+        IntersectsRemoved = AF.removeJunctions(junctions, fil_centers, dot_size = 3) #check intersects removed
+        IntersectsRemoved[IntersectsRemoved > 0] = 1
+        IntersectsRemoved[IntersectsRemoved < 0] = 0
+
+        assert(np.max(IntersectsRemoved) == 1)
+        fil_centers = IntersectsRemoved
+
+        #Step 2: Create a filament dictionary 
+        print('creating dictionary')
+        segment_map = detect_sources(fil_centers, threshold=.5,   npixels=10)
+        segm_deblend = deblend_sources(fil_centers, segment_map, npixels=10, nlevels=32, contrast=0.001,progress_bar=False)
+
+        segment_info = {}
+        for label in segm_deblend.labels:
+            mask = segm_deblend.data == label # Find pixels that belong to this segment
+            coords = np.argwhere(mask)  # shape (N, 2), where each entry is (y, x)
+
+            num_pixels = coords.shape[0]  # total number of pixels in this filament
+
+            pixel_list = []
+            for (y, x) in coords:
+                pixel_value = data[y, x]  # value from the original image
+                pixel_list.append((x, y, pixel_value, num_pixels))  # (x, y, value, Npix)
+
+            segment_info[label] = pixel_list
+    #__________________________________________________________________________________
+
+
         #step 6: Define PSF 
+        print('PSF time')
         psf_model = CircularGaussianPRF(flux=1, fwhm=fwhmval) #No longer divide fwhmval/2.35
         psf_model.x_0.fixed = True #allowing this to vary when x_coords, y_coords given no intentional offset shows most would only move by ~0.125 pix, so neglect any shift
         psf_model.y_0.fixed = True
@@ -1215,42 +1251,6 @@ class FilamentMap:
             hdu = fits.PrimaryHDU(model, header=header)
             hdu.writeto(out_path, overwrite=True)
 
-    #_________________________________________________________________________________________________________
-        #Part 2, Density Analysis
-        print("Begenning Density Calculations")
-        #Step 0: Load composite map 
-        coords_data = self.Composite #reload as non blocked version of composite 
-        data = odata 
-        
-        #Step 1: Remove junctions
-        print('junctions removed')
-        fil_centers = copy.deepcopy(coords_data)
-        junctions = AF.getSkeletonIntersection(np.array(fil_centers*255))
-        IntersectsRemoved = AF.removeJunctions(junctions, fil_centers, dot_size = 3) #check intersects removed
-        IntersectsRemoved[IntersectsRemoved > 0] = 1
-        IntersectsRemoved[IntersectsRemoved < 0] = 0
-
-        assert(np.max(IntersectsRemoved) == 1)
-        fil_centers = IntersectsRemoved
-
-        #Step 2: Create a filament dictionary 
-        print('creating dictionary')
-        segment_map = detect_sources(fil_centers, threshold=.5,   npixels=10)
-        segm_deblend = deblend_sources(fil_centers, segment_map, npixels=10, nlevels=32, contrast=0.001,progress_bar=False)
-
-        segment_info = {}
-        for label in segm_deblend.labels:
-            mask = segm_deblend.data == label # Find pixels that belong to this segment
-            coords = np.argwhere(mask)  # shape (N, 2), where each entry is (y, x)
-
-            num_pixels = coords.shape[0]  # total number of pixels in this filament
-
-            pixel_list = []
-            for (y, x) in coords:
-                pixel_value = data[y, x]  # value from the original image
-                pixel_list.append((x, y, pixel_value, num_pixels))  # (x, y, value, Npix)
-
-            segment_info[label] = pixel_list
 
         #step 3: Set partameters for Density Calculations
         inclination = 9 * np.pi / 180  # Inclination in radians
@@ -1262,7 +1262,7 @@ class FilamentMap:
         # Step 4:Create a 2D map to associate flux values with filament spine pixels
         flux_map = np.zeros_like(model, dtype=float)
         for x, y, f in zip(x_fit.astype(int), y_fit.astype(int), flux_fit):
-            flux_map[y, x] = f  # Note: numpy image convention is (row=y, col=x)
+            flux_map[y, x] = f  
 
         I_F770W_16pc = flux_map*globalfactor
 
@@ -1312,7 +1312,7 @@ class FilamentMap:
         csv_data[f'Line_Density_{Scale}'] = Line_Density
         csv_data[f'Length_{Scale}'] = Lengths
         csv_data[f'Mass_{Scale}'] = Mass
-
+ 
         # Convert to DataFrame
         df = pd.DataFrame(csv_data)
 
