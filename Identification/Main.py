@@ -4,13 +4,17 @@
 from pathlib import Path
 import FilamentMap
 import Modified_Constrained_Diffusion
+from Modified_Constrained_Diffusion import get_fits_file_path
 import mainFuncs
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import os
 import time
+import MySourceFinder
 from astropy.io import fits
+import cdd_pix
+import CloudClean
 matplotlib.use('Agg')
 
 if __name__ == "__main__":
@@ -28,6 +32,10 @@ if __name__ == "__main__":
     csv_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data\ImageData.xlsx")
     param_file_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data\SoaxParams.txt")
     batch_path = Path(r"C:\Users\jhoffm72\Downloads\batch_soax_v3.7.0.exe")
+
+    #For Julia soure removal
+    julia_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\PHANGSDustFill\Identification\JuliaCloudClean.ipynb")
+    julia_out_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\PHANGSDustFill\Identification\JuliaCloudClean_Output.ipynb")
 
     #SOAX params
     min_snake_length_ss = 25
@@ -51,15 +59,28 @@ if __name__ == "__main__":
 
         label_folder_path = os.path.join(base_dir, label)
 
-        if not os.path.isdir(label_folder_path):  # Skip if it's not a directory
+        if not os.path.isdir(label_folder_path):  # Skip if it's not a directory`       `
             continue
 
-        if(label != 'OriginalMiriImages' and label != "Figures" and 'ngc1365_F770W' in label): 
+        if(label != 'OriginalMiriImages' and label != "Figures" and "0628_F770W" in label): 
 
-            distance_Mpc,res, pixscale, min_power, max_power = mainFuncs.getInfo(label, csv_path) #get relevant information for image from csv file
-            Modified_Constrained_Diffusion.decompose(label_folder_path, base_dir, label, distance_Mpc, res, pixscale, min_power, max_power) #decompose into scales
+            distance_Mpc,res, pixscale, MJysr, Band, min_power, max_power, Rem_sources = mainFuncs.getInfo(label, csv_path) #get relevant information for image from csv file
+
+            ScalePix =  pixscale * 4.848 * distance_Mpc 
+            orig_image = get_fits_file_path(os.path.join(base_dir, "OriginalImages"), label)
+
+            if Rem_sources:
+                cdd_pix.decompose(label_folder_path)
+                mask_save_path = MySourceFinder. CreateSourceMask(label_folder_path, orig_image, res, pixscale, MJysr, Band, ScalePix ) 
+                image_path = CloudClean.Remove( julia_path,  julia_out_path, mask_save_path,  orig_image, label_folder_path)
+            else:
+                image_path = get_fits_file_path(os.path.join(base_dir, "OriginalImages"), label)
+
+            Modified_Constrained_Diffusion.decompose(image_path, label_folder_path, base_dir, label, distance_Mpc, res, pixscale, min_power, max_power, Rem_sources) #decompose into scales
+
+
             FilamentMapList = mainFuncs.setUpGalaxy(base_dir, label_folder_path, label, distance_Mpc, res, pixscale, param_file_path, noise_min, flatten_perc, min_intensity) #Initialize Filament Map objects
-            mainFuncs.CreateSNRPlot(FilamentMapList, base_dir, percentile = 99, write = True)
+            # mainFuncs.CreateSNRPlot(FilamentMapList, base_dir, percentile = 99, write = True)
 
             for filMap in FilamentMapList: #iterate through each Filament Map object 
 

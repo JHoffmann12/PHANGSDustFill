@@ -88,6 +88,13 @@ class FilamentMap:
         CDD_path = os.path.join(label_folder_path, "CDD")
         fits_path = os.path.join(CDD_path, fits_file)
 
+        self.BaseDir = base_dir
+        self.Label = label
+        Scale = self._getScale(fits_file)
+        self.Scale = Scale
+        self.FitsFile = fits_file
+
+
         with fits.open(fits_path, ignore_missing=True) as hdul:
             OrigData = np.array(hdul[0].data)  # Assuming the image data is in the primary HDU
             print(f'origData type 0: {type(OrigData)}')
@@ -107,25 +114,23 @@ class FilamentMap:
             if file_name_without_extension in fits_file:
                 input_path = os.path.join(input_dir, file_name)
 
-        with fits.open(input_path) as hdu:
+        with fits.open(input_path,ignore_missing=True) as hdu:
             hdu.info()
+        try:
             img=hdu[0].data #add error handling for img = hdu[1].data
+            OrigData[img < min_intensity] = 0
 
-        OrigData[img < min_intensity] = 0
-
-        self.Label = label
+        except:
+            OrigData = OrigData
+            
         self.ProbabilityMap = np.zeros_like(OrigData)
         self.BkgSubDivRMSMap = np.zeros_like(OrigData)
-        Scale = self._getScale(fits_file)
-        self.Scale = Scale
         self.OrigHeader = OrigHeader
         self.OrigData = OrigData
         self.BlockHeader = OrigHeader.copy() #updated later
         self.Composite = np.zeros_like(OrigData)
         self.Scalepix = scalepix
-        self.BaseDir = base_dir
         fits_file = os.path.splitext(fits_file)[0]  # removes the .fits extension
-        self.FitsFile = fits_file
         self.BlockFactor = self._getBlockFactor()
         self.BlankRegionMask = self._getBlankRegionMask()
 
@@ -268,58 +273,48 @@ class FilamentMap:
         return block_factor
     
 
-
-    def _getBlankRegionMask(self): 
-
+    def _getBlankRegionMask(self):
         """
-        Generate a mask to hide large vacant regions as well as the image border. 
-
+        Generate a mask to hide large vacant regions as well as the image border.
         Returns: 
-        - a mask, where true indicates a region to be masked. 
-
+        - a mask, where true indicates a region to be masked.
         """
-        
-        threshold = 10**-20 #pixels below this value will be seeds for mask
-
+        threshold = 10**-20  # pixels below this value will be seeds for mask
         data_to_mask = self.OrigData
-        
-        mask_copy = copy.deepcopy(data_to_mask)
 
-        #Dilate White Pixels
+        # Step 1: Create initial mask (True = masked, False = keep)
+        mask_copy = copy.deepcopy(data_to_mask)
         mask_copy[mask_copy > threshold] = 255
         mask_copy = mask_copy.astype(np.uint8)
-        kernel_size = 3
-        kernel = np.ones((kernel_size, kernel_size), np.uint8)
-        dilated_image = cv2.dilate(mask_copy, kernel, iterations= 5) 
+        
+        # Step 2: First dilation (aggressive)
+        kernel_size_1 = 10 # Smaller kernel = more expansion of masked region
+        kernel_1 = np.ones((kernel_size_1, kernel_size_1), np.uint8)
+        dilated_image = cv2.dilate(mask_copy, kernel_1, iterations=5)  # More iterations = stronger expansion
 
-        #threshold other way
+        # Step 3: Convert to boolean mask (True = masked)
         copy_image = copy.deepcopy(data_to_mask).astype(np.float32)
         copy_image[dilated_image < threshold] = np.nan
         mask = np.isnan(copy_image)
 
-        #set up binary mask
+        # Step 4: Further expand the True (masked) regions
         binary_mask = np.zeros_like(copy_image, dtype=np.uint8)
-        binary_mask[mask] = 255
-        binary_mask[~mask] = 0
+        binary_mask[mask] = 255  # White = masked (True) regions to expand
 
-        #dilate the mask
-        kernel_size = 3
-        kernel = np.ones((kernel_size, kernel_size), np.uint8)
-        dilated_mask = cv2.dilate(binary_mask, kernel, iterations=1)
+        kernel_size_2 = 25  # Even larger kernel for final expansion
+        kernel_2 = np.ones((kernel_size_2, kernel_size_2), np.uint8)
+        dilated_mask = cv2.dilate(binary_mask, kernel_2, iterations=3)  # Strong final expansion
 
-        dilated_image = copy.deepcopy(data_to_mask).astype(np.float32)
-        dilated_image[dilated_mask==255] = np.nan
+        # Step 5: Final mask (True = masked, False = keep)
+        final_mask = dilated_mask == 255  # Convert back to boolean
 
-        #make a mask based on dilated image, true value indicates pixel should be masked
-        mask = np.isnan(dilated_image)
-        assert(not np.isnan(mask).any())
-
-        plt.imshow(np.uint8(mask) * 255)
+        # Visualization (optional)
+        plt.imshow(np.uint8(final_mask) * 255, cmap='gray')
         plt.title(f"Mask of {self.Label} at {self.Scale}")
         plt.savefig(Path(f"{self.BaseDir}/Figures/Mask_{self.Label}_{self.Scale}.png"))
         plt.close()
 
-        return  mask
+        return final_mask
 
 
     def setBkgSubDivRMS(self, noise_min):
@@ -1133,7 +1128,12 @@ class FilamentMap:
         #Step 1: Load CDD Image
         fits_path = os.path.join(self.BaseDir, self.Label)
         fits_path = os.path.join(fits_path, "CDD")
-        fits_path = os.path.join(fits_path, self.FitsFile + ".fits")
+        
+        if not self.FitsFile.endswith(".fits"):
+            fits_path = os.path.join(fits_path, self.FitsFile + ".fits")
+        else: 
+            fits_path = os.path.join(fits_path, self.FitsFile)
+
         with fits.open(fits_path, ignore_missing=True) as hdul:
             data = np.array(hdul[0].data)  # Assuming the image data is in the primary HDU
             header = hdul[0].header
@@ -1181,145 +1181,149 @@ class FilamentMap:
         IntersectsRemoved[IntersectsRemoved > 0] = 1
         IntersectsRemoved[IntersectsRemoved < 0] = 0
 
-        assert(np.max(IntersectsRemoved) == 1)
-        fil_centers = IntersectsRemoved
 
-        #Step 2: Create a filament dictionary 
-        print('creating dictionary')
-        segment_map = detect_sources(fil_centers, threshold=.5,   npixels=10)
-        segm_deblend = deblend_sources(fil_centers, segment_map, npixels=10, nlevels=32, contrast=0.001,progress_bar=False)
+        try: 
 
-        segment_info = {}
-        for label in segm_deblend.labels:
-            mask = segm_deblend.data == label # Find pixels that belong to this segment
-            coords = np.argwhere(mask)  # shape (N, 2), where each entry is (y, x)
+            fil_centers = IntersectsRemoved
 
-            num_pixels = coords.shape[0]  # total number of pixels in this filament
+            #Step 2: Create a filament dictionary 
+            print('creating dictionary')
+            segment_map = detect_sources(fil_centers, threshold=.5,   npixels=10)
+            segm_deblend = deblend_sources(fil_centers, segment_map, npixels=10, nlevels=32, contrast=0.001,progress_bar=False)
 
-            pixel_list = []
-            for (y, x) in coords:
-                pixel_value = data[y, x]  # value from the original image
-                pixel_list.append((x, y, pixel_value, num_pixels))  # (x, y, value, Npix)
+            segment_info = {}
+            for label in segm_deblend.labels:
+                mask = segm_deblend.data == label # Find pixels that belong to this segment
+                coords = np.argwhere(mask)  # shape (N, 2), where each entry is (y, x)
 
-            segment_info[label] = pixel_list
-    #__________________________________________________________________________________
+                num_pixels = coords.shape[0]  # total number of pixels in this filament
+
+                pixel_list = []
+                for (y, x) in coords:
+                    pixel_value = data[y, x]  # value from the original image
+                    pixel_list.append((x, y, pixel_value, num_pixels))  # (x, y, value, Npix)
+
+                segment_info[label] = pixel_list
+        #__________________________________________________________________________________
 
 
-        #step 6: Define PSF 
-        print('PSF time')
-        psf_model = CircularGaussianPRF(flux=1, fwhm=fwhmval) #No longer divide fwhmval/2.35
-        psf_model.x_0.fixed = True #allowing this to vary when x_coords, y_coords given no intentional offset shows most would only move by ~0.125 pix, so neglect any shift
-        psf_model.y_0.fixed = True
-        psf_model.fwhm.fixed = False
-        psf_model.flux.min = 0. #### -1. * np.std(noise)  #keep all models positive
-        psf_model.fwhm.max = fwhmval * 2.0 #do not allow the fwhm to encroach into next larger single scale interval
-        psf_model.fixed
+            #step 6: Define PSF 
+            print('PSF time')
+            psf_model = CircularGaussianPRF(flux=1, fwhm=fwhmval) #No longer divide fwhmval/2.35
+            psf_model.x_0.fixed = True #allowing this to vary when x_coords, y_coords given no intentional offset shows most would only move by ~0.125 pix, so neglect any shift
+            psf_model.y_0.fixed = True
+            psf_model.fwhm.fixed = False
+            psf_model.flux.min = 0. #### -1. * np.std(noise)  #keep all models positive
+            psf_model.fwhm.max = fwhmval * 2.0 #do not allow the fwhm to encroach into next larger single scale interval
+            psf_model.fixed
 
-        #step 7: Apply PSF to create model
-        net_scaling_factor = 3.2728865403756338
-        y_coords, x_coords = np.where(coords_data > 0)
-        init_params = QTable()
-        init_params['x'] = x_coords+0.0
-        init_params['y'] = y_coords+0.0
-        init_params['flux'] = data[coords_data>0]*net_scaling_factor
+            #step 7: Apply PSF to create model
+            net_scaling_factor = 3.2728865403756338
+            y_coords, x_coords = np.where(coords_data > 0)
+            init_params = QTable()
+            init_params['x'] = x_coords+0.0
+            init_params['y'] = y_coords+0.0
+            init_params['flux'] = data[coords_data>0]*net_scaling_factor
 
-        # Define PSF fitting region
-        psf_shape = (2*int(np.ceil(fwhmval)) + 1, 2*int(np.ceil(fwhmval)) + 1)
-        fit_shape = psf_shape
-        grouper = SourceGrouper(min_separation=1)
-        psfphot = PSFPhotometry(psf_model, fit_shape, grouper = grouper, fitter_maxiters = 2) # !!! 2 iterations used, could minimally explore higher but might not be needed with good guess and could lead to divergence?
-        phot = psfphot(data, error=self.NoiseMap, init_params=init_params)
+            # Define PSF fitting region
+            psf_shape = (2*int(np.ceil(fwhmval)) + 1, 2*int(np.ceil(fwhmval)) + 1)
+            fit_shape = psf_shape
+            grouper = SourceGrouper(min_separation=1)
+            psfphot = PSFPhotometry(psf_model, fit_shape, grouper = grouper, fitter_maxiters = 2) # !!! 2 iterations used, could minimally explore higher but might not be needed with good guess and could lead to divergence?
+            phot = psfphot(data, error=self.NoiseMap, init_params=init_params)
 
+        
+            #model
+            resid = psfphot.make_residual_image(data)
+            model = (data - resid)  # Model is data minus residuals
+
+            #Scale model again
+            ratio=data[model != 0]/model[model != 0]
+            ratiouseful=ratio[(ratio>0.05) & (ratio<6.)]
+            ratiomean,ratiomedian,ratiostd=sigma_clipped_stats(ratiouseful, sigma=2, maxiters=5)
+            globalfactor=ratiomedian
+            model = globalfactor * model
+
+            #Project back
+            BlockData = np.zeros((int(odata.shape[0]), int(odata.shape[1]))) 
+            model, _ = reproject_interp((model, self.BlockHeader), header, shape_out=(np.shape(BlockData)))
+
+            if(write_fits):
+                out_path = Path(f"{self.BaseDir}/{self.Label}/SyntheticMap/{self.FitsFile}_SyntheticMap.fits")
+                hdu = fits.PrimaryHDU(model, header=header)
+                hdu.writeto(out_path, overwrite=True)
+
+
+            #step 3: Set partameters for Density Calculations
+            inclination = 9 * np.pi / 180  # Inclination in radians
+            sSFR = 1.74 #get specific SFR*
+            x_fit = phot['x_fit']
+            y_fit = phot['y_fit']
+            flux_fit = phot['flux_fit']
+
+            # Step 4:Create a 2D map to associate flux values with filament spine pixels
+            flux_map = np.zeros_like(model, dtype=float)
+            for x, y, f in zip(x_fit.astype(int), y_fit.astype(int), flux_fit):
+                flux_map[y, x] = f  
+
+            I_F770W_16pc = flux_map*globalfactor
+
+            # Step 5: Extract Density and mass
+            print('extracting density')
+            I_F770W_16pc = I_F770W_16pc * np.cos(np.radians(inclination))
+            log_C_F770W = -0.21 * (np.log10(sSFR) + 10.14)  
+            valid_mask_1 = I_F770W_16pc > 0
+            x = np.zeros_like(I_F770W_16pc)
+            x[valid_mask_1] = np.log(I_F770W_16pc[valid_mask_1]) - log_C_F770W
+            log_I_CO_2_1_16pc = 0.88 * (x - 1.44) + 1.36
+            I_CO__2_1_16pc = 10**log_I_CO_2_1_16pc
+            I_CO__2_1_16pc[~valid_mask_1] = 0
+            Molecular_Mass = 5.5 * I_CO__2_1_16pc #Units of Solar mass per pix^2
+
+            #step 6: Save Data
+            print('converting to csv data')
+            csv_data = {}
+
+            Line_Density = []
+            Lengths = []
+            Mass = []
+
+            for fil_id, pix_list in segment_info.items():
+                mass_sum = []
+                fil_length = len(pix_list)
+                img = np.zeros_like(Molecular_Mass)
+                centers_mask = np.zeros_like(Molecular_Mass)
+
+                x_coords = []
+                y_coords = []
+
+                for values in pix_list:
+                    x = values[0]
+                    y = values[1]
+                    mass_sum.append(Molecular_Mass[y, x])
+                    img[y, x] = Molecular_Mass[y, x]
+                    centers_mask[y, x] = 1
+                    x_coords.append(x)
+                    y_coords.append(y)
+
+                Line_Density.append(np.sum(mass_sum) / (self.Scalepix * fil_length))
+                Lengths.append(self.Scalepix * fil_length)
+                Mass.append(np.sum(mass_sum))
+
+            # Store in dictionary with scale-specific column names
+            csv_data[f'Line_Density_{Scale}'] = Line_Density
+            csv_data[f'Length_{Scale}'] = Lengths
+            csv_data[f'Mass_{Scale}'] = Mass
     
-        #model
-        resid = psfphot.make_residual_image(data)
-        model = (data - resid)  # Model is data minus residuals
+            # Convert to DataFrame
+            df = pd.DataFrame(csv_data)
 
-        #Scale model again
-        ratio=data[model != 0]/model[model != 0]
-        ratiouseful=ratio[(ratio>0.05) & (ratio<6.)]
-        ratiomean,ratiomedian,ratiostd=sigma_clipped_stats(ratiouseful, sigma=2, maxiters=5)
-        globalfactor=ratiomedian
-        model = globalfactor * model
+            # Save to CSV
+            out_path = Path(f"{self.BaseDir}/{self.Label}/SyntheticMap/{self.FitsFile}_DensityData.csv")
+            df.to_csv(out_path, index=False)
 
-        #Project back
-        BlockData = np.zeros((int(odata.shape[0]), int(odata.shape[1]))) 
-        model, _ = reproject_interp((model, self.BlockHeader), header, shape_out=(np.shape(BlockData)))
-
-        if(write_fits):
-            out_path = Path(f"{self.BaseDir}/{self.Label}/SyntheticMap/{self.FitsFile}_SyntheticMap.fits")
-            hdu = fits.PrimaryHDU(model, header=header)
-            hdu.writeto(out_path, overwrite=True)
-
-
-        #step 3: Set partameters for Density Calculations
-        inclination = 9 * np.pi / 180  # Inclination in radians
-        sSFR = 1.74 #get specific SFR*
-        x_fit = phot['x_fit']
-        y_fit = phot['y_fit']
-        flux_fit = phot['flux_fit']
-
-        # Step 4:Create a 2D map to associate flux values with filament spine pixels
-        flux_map = np.zeros_like(model, dtype=float)
-        for x, y, f in zip(x_fit.astype(int), y_fit.astype(int), flux_fit):
-            flux_map[y, x] = f  
-
-        I_F770W_16pc = flux_map*globalfactor
-
-        # Step 5: Extract Density and mass
-        print('extracting density')
-        I_F770W_16pc = I_F770W_16pc * np.cos(np.radians(inclination))
-        log_C_F770W = -0.21 * (np.log10(sSFR) + 10.14)  
-        valid_mask_1 = I_F770W_16pc > 0
-        x = np.zeros_like(I_F770W_16pc)
-        x[valid_mask_1] = np.log(I_F770W_16pc[valid_mask_1]) - log_C_F770W
-        log_I_CO_2_1_16pc = 0.88 * (x - 1.44) + 1.36
-        I_CO__2_1_16pc = 10**log_I_CO_2_1_16pc
-        I_CO__2_1_16pc[~valid_mask_1] = 0
-        Molecular_Mass = 5.5 * I_CO__2_1_16pc #Units of Solar mass per pix^2
-
-        #step 6: Save Data
-        print('converting to csv data')
-        csv_data = {}
-
-        Line_Density = []
-        Lengths = []
-        Mass = []
-
-        for fil_id, pix_list in segment_info.items():
-            mass_sum = []
-            fil_length = len(pix_list)
-            img = np.zeros_like(Molecular_Mass)
-            centers_mask = np.zeros_like(Molecular_Mass)
-
-            x_coords = []
-            y_coords = []
-
-            for values in pix_list:
-                x = values[0]
-                y = values[1]
-                mass_sum.append(Molecular_Mass[y, x])
-                img[y, x] = Molecular_Mass[y, x]
-                centers_mask[y, x] = 1
-                x_coords.append(x)
-                y_coords.append(y)
-
-            Line_Density.append(np.sum(mass_sum) / (self.Scalepix * fil_length))
-            Lengths.append(self.Scalepix * fil_length)
-            Mass.append(np.sum(mass_sum))
-
-        # Store in dictionary with scale-specific column names
-        csv_data[f'Line_Density_{Scale}'] = Line_Density
-        csv_data[f'Length_{Scale}'] = Lengths
-        csv_data[f'Mass_{Scale}'] = Mass
- 
-        # Convert to DataFrame
-        df = pd.DataFrame(csv_data)
-
-        # Save to CSV
-        out_path = Path(f"{self.BaseDir}/{self.Label}/SyntheticMap/{self.FitsFile}_DensityData.csv")
-        df.to_csv(out_path, index=False)
-
+        except Exception as e:
+            print(f"Error occurred for {self.FitsFile}:", str(e))  
 
 
 

@@ -14,6 +14,19 @@ import astropy.units as u  # Add this line to import the units
 
 matplotlib.use('Agg')
 
+def getMJysr(bandstr, inststr):
+    if bandstr=='F770W': sigma_MJysr=0.11 # JWST Cycle 1 imaging 1-sigma surface brightness sensitivity from Lee+23 (JWST survey paper) with units of MJy/sr
+    if bandstr=='F1000W': sigma_MJysr=0.12
+    if bandstr=='F1130W': sigma_MJysr=0.15
+    if bandstr=='F2100W': sigma_MJysr=0.25
+    if bandstr=='F360M': sigma_MJysr=0.58
+    if bandstr=='F335M': sigma_MJysr=0.42
+    if bandstr=='F300M': sigma_MJysr=0.45
+    if bandstr=='F200W': sigma_MJysr=0.68
+    if bandstr=='F187N': sigma_MJysr=1.00 #TBD using Cycle 2, also do the others above change for Cycle 2??
+    if bandstr=='F150W': sigma_MJysr=1.00 #TBD using Cycle 2
+    return sigma_MJysr 
+
 
 def getInfo(label, csv_path):
 
@@ -33,7 +46,7 @@ def getInfo(label, csv_path):
 
     """
 
-    print(label)
+    print(f'Label is {label}')
     table = pd.read_excel(csv_path)
     label, band = label.split("_")
 
@@ -52,7 +65,17 @@ def getInfo(label, csv_path):
         pixscale = label_info.iloc[0]['pixscale']
         min_power = label_info.iloc[0]['Power of 2 min']
         max_power = label_info.iloc[0]['Power of 2 max']
-        return distance, res, pixscale, min_power, max_power
+        Rem_sources = label_info.iloc[0]['Rem_sources']
+        Band = label_info.iloc[0]['Band']
+        Instr = label_info.iloc[0]['INSTR']
+
+        if bool(Rem_sources):
+            MJysr = getMJysr(Band, Instr)
+        else:
+            MJysr = np.nan #not needed
+
+        return distance, res, pixscale, MJysr, Band, min_power, max_power, bool(Rem_sources)
+    
     else: 
         print("Image not found in csv!")
 
@@ -167,9 +190,9 @@ def createDirectoryStructure(base_directory, csv_path):
 
                 # Create subfolders
                 subfolders = [
-                    "CDD", "Composites", "BlockedPng", "SyntheticMap", "SoaxOutput", "BkgSubDivRMS"
+                    "CDD", "Composites", "BlockedPng", "SyntheticMap", "SoaxOutput", "BkgSubDivRMS", "Source_Removal"
                 ]
-                _, _, _, min_power, max_power = getInfo(label, csv_path)  # Get relevant information for the image
+                _, _, _, _, _, min_power, max_power, _ = getInfo(label, csv_path)  # Get relevant information for the image
 
                 soax_subfolders = []
                 for i in range(min_power, max_power + 1):
@@ -183,6 +206,12 @@ def createDirectoryStructure(base_directory, csv_path):
                     if subfolder == "SoaxOutput":
                         for soax_subfolder in soax_subfolders:
                             os.makedirs(os.path.join(subfolder_path, soax_subfolder), exist_ok=True)
+                            
+                    if subfolder == "Source_Removal":
+                        cdd_pix_path = os.path.join(subfolder_path, "CDD_Pix")
+                        os.makedirs(cdd_pix_path, exist_ok=True)
+                        table_path = os.path.join(subfolder_path, "Source_Tables")
+                        os.makedirs(table_path, exist_ok=True)
 
                 print(f"Directory structure created for galaxy: {label}")
 

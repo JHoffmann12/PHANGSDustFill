@@ -87,7 +87,7 @@ def get_fits_file_path(folder_path, galaxy_name):
     
     return None
 
-def decompose(label_folder_path, base_dir, label, distance_mpc, res, pixscale, min_power, max_power):
+def decompose(image_path, label_folder_path, base_dir, label, distance_mpc, res, pixscale, min_power, max_power, Source_Rem):
 
     """
     Decompose th eimage into specified scales and save the decompositions into CDD subfolder
@@ -109,7 +109,7 @@ def decompose(label_folder_path, base_dir, label, distance_mpc, res, pixscale, m
         fracsmooth=0.333 # to remove divots, CDD outputs will be smoothed with Gaussian kernel having sigma=fracsmooth*pcscale[or matching pixscale]
 
 
-        imagepath = get_fits_file_path(os.path.join(base_dir, "OriginalImages"), label)
+        imagepath = image_path
 
         # Open FITS file and handle various erros
         with fits.open(imagepath) as hdu:
@@ -134,6 +134,10 @@ def decompose(label_folder_path, base_dir, label, distance_mpc, res, pixscale, m
                         header_in['NAXIS1'] = image_in.shape[1]
                         header_in['NAXIS2'] = image_in.shape[0]
 
+            if Source_Rem: 
+                image_in = image_in[0] #account for cube output from julia cloudclean
+
+            header_in = clean_header(header_in) 
             hdu.info()
 
         # image_in =  extinctionEqualization(imagepath, image_in) #equalize if an extinction image
@@ -186,7 +190,17 @@ def decompose(label_folder_path, base_dir, label, distance_mpc, res, pixscale, m
             except ValueError:
                 print("Error: Could not smooth CDD image with convolution")    
 
-            hduout = fits.PrimaryHDU(data = image_now, header=header)
+
+
+            imagepath = get_fits_file_path(os.path.join(base_dir, "OriginalImages"), label)
+            with fits.open(imagepath) as hdu:
+                header = hdu[0].header
+                data = hdu[0].data
+
+            image_now[np.isnan(data)] = 0
+            
+            hduout = fits.PrimaryHDU(data=image_now, header=header)
+
             tag = 'pc.fits'
 
             base_name = os.path.splitext(os.path.basename(imagepath))[0]
@@ -199,6 +213,25 @@ def decompose(label_folder_path, base_dir, label, distance_mpc, res, pixscale, m
 
             hduout.writeto(outputpath, overwrite=True)
             print('Image saved')
+
+
+def clean_header(header):
+    """Remove invalid or problematic FITS header cards (e.g. CONTINUE)."""
+    cleaned = fits.Header()
+    for card in header.cards:
+        try:
+            if card.keyword == 'CONTINUE':
+                continue
+            # Ensure the keyword is a valid FITS keyword (max 8 characters, ASCII)
+            if not isinstance(card.keyword, str) or len(card.keyword) > 8:
+                continue
+            cleaned.append(card)
+        except Exception as e:
+            print(f"Skipping bad card: {card} — {e}")
+            continue
+    return cleaned
+
+
 
 def roundToNearestPowerOf2(n):
 
