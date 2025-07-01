@@ -44,25 +44,6 @@ import copy
 plt.rcParams['figure.figsize'] = [15, 15]
 
 
-def gaussian_2d(xy, x0, y0, sigma, amplitude, offset):
-
-    """
-    Define a 2D Gaussian function
-    
-    Parameters:
-    - xy: A tuple of (x, y) coordinates (arrays or values).
-    - x0: The x-coordinate of the center of the Gaussian.
-    - y0: The y-coordinate of the center of the Gaussian.
-    - sigma: The standard deviation (spread) of the Gaussian.
-    - amplitude: The peak value of the Gaussian.
-    - offset: A constant value to add to the Gaussian function (baseline).
-    """
-
-    x, y = xy
-    exp_term = np.exp(-((x - x0)**2 + (y - y0)**2) / (2 * sigma**2))
-
-    return amplitude * exp_term + offset
-
 
 def get_fits_file_path(folder_path, galaxy_name):
 
@@ -87,118 +68,122 @@ def get_fits_file_path(folder_path, galaxy_name):
     
     return None
 
-def decompose(label_folder_path, base_dir = 0, label = 0, distance_mpc = 0, res = 0, pixscale = 0, min_power = 0, max_power = 0):
+def decompose(label_folder_path, base_dir, label, numscales=3):
 
-    """
-    Decompose th eimage into specified scales and save the decompositions into CDD subfolder
-
-    Parameters:
-    - label_folder_path (str): path to the folder associated with the specified label/celestial object
-    - base_dir (str): Base directory for all FilPHANGS files
-    - label (str): label of the desired celestial object
-    - distance_Mpc (float): Distance in Mega Parsecs to the celestial object
-    - res (float): angula resolution associated with the image
-    - pixscale (str): The pixel level resolution associated with the image
-    - min_power(float): minimum power of 2 for scale decomposition
-    - max_power(float): maximum power of 2 for scale decomposition
-    """
-    
     if(not decompositionExists(label_folder_path)): #check if scale decomposed image exists
+        source_rem_dir = os.path.join(label_folder_path, "Source_Removal\CDD_Pix")
+
+        orig_image_path = get_fits_file_path(os.path.join(base_dir, "OriginalImages"), label)
+
+        with fits.open(orig_image_path, ignore_missing=True) as hdul:
+            image = np.array(hdul[0].data)  # Assuming the image data is in the primary HDU
+            header = hdul[0].header
+
+        result, residual = constrained_diffusion_decomposition(image, e_rel=3e-2,max_n=numscales, sm_mode='reflect')  #for YMC stuff keep max_n=numscales small for execution speed and since full decomp irrelevent
+
+        idx=0
+
+        for i in result:
+            save_path = os.path.join(source_rem_dir, '_CDDfs'+str(2**idx).rjust(4, '0')+'pix.fits')
+            print(f'saving to {save_path}')
+            hduout=fits.PrimaryHDU(data=i,header=header)
+            hduout.writeto(save_path, overwrite=True)
+            idx=idx+1
 
 
-        fracsmooth=0.333 # to remove divots, CDD outputs will be smoothed with Gaussian kernel having sigma=fracsmooth*pcscale[or matching pixscale]
+def constrained_diffusion_decomposition(data,
+                                      e_rel=3e-2,
+                                      max_n=None, sm_mode='reflect'):
 
+    """
+        perform constrained diffusion decomposition
+        inputs:
+            data: 
+                n-dimensional array
+            e_rel:
+                relative error, a smaller e_rel means a better
+                accuracy yet a larger computational cost
+            max_n: 
+                maximum number of channels. Channel number
+                ranges from 0 to max_n
+                if None, the program will calculate it automatically
+            sm_mode: 
+                {'reflect', 'constant', 'nearest', 'mirror', 'wrap'}, optional The mode
+                parameter determines how the input array is extended beyond its
+                boundaries in the convolution operation. Default is 'reflect'.
+        output:
+            results: of constained diffusion decomposition. Assuming that the input
+            is a n-dimensional array, then the output would be a n+1 dimensional
+            array. The added dimension is the scale. Component maps can be accessed
+            via output[n], where n is the channel number.
 
-        imagepath = get_fits_file_path(os.path.join(base_dir, "OriginalImages"), label)
-
-        # Open FITS file and handle various erros
-        with fits.open(imagepath) as hdu:
-            try:
-                image_in = hdu[0].data
-                header_in = hdu[0].header
-            except IndexError:
-                image_in = hdu[1].data
-                header_in = hdu[1].header
-            try:
-                min_dim_img = np.min([header_in['NAXIS1'], header_in['NAXIS2']])
-            except KeyError:
-                try: 
-                    header_in['NAXIS1'] = image_in.shape[1]
-                    header_in['NAXIS2'] = image_in.shape[0]
-                except AttributeError: 
-                    image_in = hdu[1].data
-                    header_in = hdu[1].header
-                    try: 
-                        min_dim_img = np.min([header_in['NAXIS1'], header_in['NAXIS2']])
-                    except KeyError: 
-                        header_in['NAXIS1'] = image_in.shape[1]
-                        header_in['NAXIS2'] = image_in.shape[0]
-
-            hdu.info()
-
-        # image_in =  extinctionEqualization(imagepath, image_in) #equalize if an extinction image
-
-        pix_pc=4.848*pixscale*distance_mpc # convert to parcecs per pixel
+                output[i] contains structures of sizes larger than 2**i pixels
+                yet smaller than 2**(i+1) pixels.
+            residual: structures too large to be contained in the results
+                
+    """
     
-        #generate scales to decompose image into
-        pixscales=(2.0**np.array(range(min_power, max_power + 1)))/pix_pc
-        pcscales = pixscales * pix_pc
-        pixscales_lo =(2.0**(np.array(range(min_power,max_power + 1))-0.5))/pix_pc
-        pixscales_hi =(2.0**(np.array(range(min_power, max_power + 1))+0.5))/pix_pc
-        res_pc=4.848*res*distance_mpc
-        idx=(pixscales_lo*pix_pc>=1.33*res_pc/2.35)  & (pixscales_hi*pix_pc/res_pc<=0.5*min_dim_img/2.35)  #check that scales work
-        pixscales_hi = pixscales_hi[idx]
-        pixscales_lo = pixscales_lo[idx]
-        pixscales = pixscales[idx]
-        pcscales = pcscales[idx]
-        print(f"pc ranges: {pixscales*pix_pc}")
+    ntot = int(log(min(data.shape))/log(2) - 1)  
+    # the total number of scale map
+    
+    result = []
+    # residual = []
+    # residual.append(data)
+    if  max_n is not None:
+        ntot = np.min([ntot, max_n])
+    print("ntot", ntot)
 
-        #decompose the image
-        result_in, residual_in, kernel_sizes = cddss.constrained_diffusion_decomposition_specificscales(
-            image_in, pixscales, pixscales_lo, pixscales_hi, e_rel=3.e-2
-        )
+    diff_image = data.copy() * 0
 
-        # Process and save outputs for each kernel size
-        for idx, image_now in enumerate(result_in):
-            header = header_in.copy()
-            header['KERNPX'] = kernel_sizes[idx]
-            header['SCLEPX'] = pixscales[idx]
-            header['SCLEPXLO'] = pixscales_lo[idx]
-            header['SCLEPXHI'] = pixscales_hi[idx]
+    for i in range(ntot):
+        print("i =", i)
+        channel_image = data.copy() * 0  
 
-            psf_stddev = (pixscales[idx] * 2.35) * fracsmooth / 2.35  # Original stddev
+        # computing the step size
+        scale_end = float(pow(2, i + 1))
+        scale_begining = float(pow(2, i))
+        t_end = scale_end**2  / 2  # t at the end of this scale
+        t_beginning = scale_begining**2  / 2 # t at the beginning of this scale
 
-            if image_now.ndim > 2:
-                image_now = image_now.squeeze()  # Remove singleton dimensions
-            if image_now.ndim != 2:
-                raise ValueError(f"Input image must be 2D; got shape {image_now.shape}")
-
-            if psf_stddev <= 0:
-                raise ValueError(f"Invalid psf_stddev: {psf_stddev}. Must be > 0.")
+        if i == 0:
+            delta_t_max = t_beginning * 0.1
+        else:
+            delta_t_max = t_beginning * e_rel
 
 
-            assert len(result_in) == len(kernel_sizes) == len(pixscales) == len(pixscales_lo) == len(pixscales_hi), \
-                "Mismatch in input list lengths."
 
-            try: 
-                image_now = np.nan_to_num(image_now)
-                image_now = gaussian_filter(image_now, sigma = psf_stddev)    
-            except ValueError:
-                print("Error: Could not smooth CDD image with convolution")    
+        niter = int((t_end - t_beginning) / delta_t_max + 0.5)
+        delta_t = (t_end - t_beginning) / niter
+        kernel_size = np.sqrt(2 * delta_t)    # size of gaussian kernel
+        print(scale_begining,scale_end)
+        print("kernel_size", kernel_size)
+        for kk in range(niter):
+            smooth_image = ndimage.gaussian_filter(data, kernel_size,
+                                                   mode=sm_mode)
+            sm_image_1 = np.minimum(data, smooth_image)
+            sm_image_2 = np.maximum(data, smooth_image)
 
-            hduout = fits.PrimaryHDU(data = image_now, header=header)
-            tag = 'pc.fits'
+            diff_image_1 = data - sm_image_1
+            diff_image_2 = data - sm_image_2
 
-            base_name = os.path.splitext(os.path.basename(imagepath))[0]
+            diff_image = diff_image * 0
 
-            if pcscales[idx] >= 1:  # Check if the value is an integer
-                pcscales[idx] = roundToNearestPowerOf2(pcscales[idx])
-                outputpath = Path(f"{base_dir}/{label}/CDD/{base_name}_CDDss{str(int(pcscales[idx])).rjust(4, '0')}{tag}")
-            else: 
-                outputpath = Path(f"{base_dir}/{label}/CDD/{base_name}_CDDss{str(float(pcscales[idx])).rjust(4, '0')}{tag}")
+            positions_1 = np.where(np.logical_and(diff_image_1 > 0, data > 0))
+            positions_2 = np.where(np.logical_and(diff_image_2 < 0, data < 0))
 
-            hduout.writeto(outputpath, overwrite=True)
-            print('Image saved')
+            diff_image[positions_1] = diff_image_1[positions_1]
+            diff_image[positions_2] = diff_image_2[positions_2]
+
+            channel_image = channel_image + diff_image
+
+            data = data - diff_image
+            # data = ndimage.gaussian_filter(data, kernel_size)     # !!!!
+        result.append(channel_image)
+        # residual.append(data)
+    residual = data
+    return result, residual
+
+
 
 def roundToNearestPowerOf2(n):
 

@@ -70,7 +70,7 @@ if __name__ == "__main__":
             orig_image = get_fits_file_path(os.path.join(base_dir, "OriginalImages"), label)
 
             if Rem_sources:
-                cdd_pix.decompose(label_folder_path)
+                cdd_pix.decompose(label_folder_path, base_dir, label, numscales=3)
                 mask_save_path = MySourceFinder. CreateSourceMask(label_folder_path, orig_image, res, pixscale, MJysr, Band, ScalePix ) 
                 image_path = CloudClean.Remove( julia_path,  julia_out_path, mask_save_path,  orig_image, label_folder_path)
             else:
