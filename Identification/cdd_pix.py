@@ -90,6 +90,23 @@ def decompose(label_folder_path, base_dir, label, numscales=3):
             hduout.writeto(save_path, overwrite=True)
             idx=idx+1
 
+        dumpbkgds=True
+        source_rem_dir = os.path.join(label_folder_path, "Source_Removal")
+
+        if dumpbkgds==True:
+            idx=0
+            summed=np.zeros_like(i)
+            for i in result:
+                summed=summed+i
+                save_path = os.path.join(source_rem_dir, '_CDDfs'+str(2**idx).rjust(4, '0')+'BKGD.fits')
+                save_path_1 = os.path.join(source_rem_dir, '_CDDfs'+str(2**idx).rjust(4, '0')+'BKGDRATIO.fits')
+
+                hduout=fits.PrimaryHDU(data=image-summed,header=header)
+                hduout.writeto(save_path,overwrite=True)
+                hduout=fits.PrimaryHDU(data=summed/(image-summed),header=header)
+                hduout.writeto(save_path_1,overwrite=True)
+                idx=idx+1
+
 
 def constrained_diffusion_decomposition(data,
                                       e_rel=3e-2,

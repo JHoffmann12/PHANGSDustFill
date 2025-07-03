@@ -86,9 +86,9 @@ if __name__ == "__main__":
 
                 #Necessary functions in order to produce a skeletonized filament map
                 filMap.scaleBkgSubDivRMSMap(write_fits = True)
-                filMap.runSoaxThreads(min_snake_length_ss, min_fg_int, batch_path) #Create 10 soax FITS files
-                filMap.createComposite(write_fits = True) #Combine all 10 Fits files
-                filMap.getSyntheticFilamentMap( write_fits = True) # Creates a synthetic map of all filaments at a single scale from the blurred probability_map. set_as_composite = True. 
+                # filMap.runSoaxThreads(min_snake_length_ss, min_fg_int, batch_path) #Create 10 soax FITS files
+                # filMap.createComposite(write_fits = True) #Combine all 10 Fits files
+                # filMap.getSyntheticFilamentMap( write_fits = True) # Creates a synthetic map of all filaments at a single scale from the blurred probability_map. set_as_composite = True. 
 
                 #Extra Processing
                 # filMap.blurComposite(set_blur_as_prob = True, write_fits = True) #Blur the composite

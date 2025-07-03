@@ -465,6 +465,7 @@ def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixs
     image_path = orig_image
 
 
+    
     with fits.open(image_path) as hdul:
         header = hdul['SCI'].header
 
@@ -741,10 +742,31 @@ def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixs
         #CONCENTRATION INDEX
         combined_catalog['CI_1pix3pix']=CI_1pix3pix
 
-        s2ncut_combined_catalog=combined_catalog[s2n_old>3] #cut to filter source detection
+        print(f'sources befoe: {len(combined_catalog)}')
+
+
+
+        bkg_ratio_path = os.path.join(source_rem_dir, '_CDDfs'+str(4).rjust(4, '0')+'BKGDRATIO.fits') #4pix bkg ratio
+
+        with fits.open(bkg_ratio_path, ignore_missing=True) as hdul:
+            bkg_ratio_img = np.array(hdul[0].data)  # Assuming the image data is in the primary HDU
+            header = hdul[0].header
+        
+        
+        aper_stats_2_bkg_ratio = ApertureStats(bkg_ratio_img, apertures_3px, wcs=w, error=datan, sigma_clip=None, mask=mask)
+        # bkg_thresh = np.percentile(bkg_ratio_img, 97)
+
+        s2ncut_combined_catalog = combined_catalog[((CI_1pix3pix <= 1.6) & (aper_stats_2_bkg_ratio.max >= 1.5)) | ((phot_1['aperture_sum'] > np.percentile(phot_1['aperture_sum'], 97)) & (CI_1pix3pix <= 1.9))] #why 97?
+        print(f'median of max is: {np.median(aper_stats_2_bkg_ratio.max)}')
+
+        print(f'sources after: {len( s2ncut_combined_catalog)}')
+    
+
         print(len(s2ncut_combined_catalog))
 
         s2ncut_combined_catalog.write(os.path.join(source_rem_dir, 'CDDfs_sources_table_S2N.fits'), overwrite=True)
+
+
 
         # Define the output region file name
         region_filename =  os.path.join(source_rem_dir, galaxy + galaxy+'_'+bandstr+'_CDDfs_sources_S2N.reg')
@@ -760,7 +782,7 @@ def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixs
         positions = list(zip(x_pix, y_pix))
 
         # Fixed radius of 3 pixels (as you want)
-        radius_pix = 4 #can change
+        radius_pix = 3 #can change
 
         # Create a binary mask
         mask = np.zeros(data.shape, dtype=int)
