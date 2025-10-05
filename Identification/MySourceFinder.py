@@ -31,6 +31,7 @@ from photutils.aperture import aperture_photometry
 from photutils.utils import calc_total_error
 from astropy.stats import SigmaClip
 from photutils.background import SExtractorBackground, Background2D, MedianBackground
+import warnings
 
 from scipy.constants import c as speed_of_light
 ###from acstools import acszpt
@@ -413,8 +414,10 @@ def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixs
     for galaxy in os.listdir(cdd_dir):
         image_path = os.path.join(cdd_dir, galaxy)
         with fits.open(image_path) as hdul:
-            data = hdul['SCI'].data
-            header = hdul['SCI'].header
+            sci_hdu = hdul['SCI'] if 'SCI' in hdul else [0]
+            data = np.array(sci_hdu.data)
+            header = sci_hdu.header
+
 
 
 
@@ -467,7 +470,8 @@ def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixs
 
     
     with fits.open(image_path) as hdul:
-        header = hdul['SCI'].header
+            sci_hdu = hdul['SCI'] if 'SCI' in hdul else hdul[0]
+            header = sci_hdu.header
 
     print(image_path)
 
@@ -552,10 +556,6 @@ def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixs
             an_ape_in=an_in*r_aper_as
             an_ape_out=an_out*r_aper_as
 
-
-
-
-
         if band=='f200w' or band=='f300m' or band=='f335m' or band=='f360m':
             hdu = fits.open(image_path)
             data = hdu['SCI'].data
@@ -577,9 +577,49 @@ def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixs
             fg_ext=0.
             counts=header['XPOSURE']/header['PHOTMJSR']
             ZP_ab=3631./1e6
+        else:
+            with fits.open(image_path) as hdul:
+                sci_hdu = hdul['SCI'] if 'SCI' in hdul else hdul[0]
+                data = np.array(sci_hdu.data)
+                header = sci_hdu.header
+
+            datan = np.zeros_like(data)  # assume no nans
+
+            # Helper function to safely get header values
+            def get_header_value(header, key, default):
+                if key in header:
+                    return header[key]
+                else:
+                    warnings.warn(f"Keyword '{key}' not found in header. Using default: {default}")
+                    return default
+
+            # Retrieve values with fallback defaults
+            to_MJy = get_header_value(header, 'PIXAR_SR', 1.0)
+            xpos = get_header_value(header, 'XPOSURE', 1.0)
+            phot = get_header_value(header, 'PHOTMJSR', 1.0)
+
+            counts = xpos / phot
+            ac = 0.0
+            fg_ext = 0.0
+            ZP_ab = 3631.0 / 1e6
+            r_aper_as=0.168
+            ZP_v=64.83/1e6
+            pix_as=6
+            an_in=2.
+            an_out=3.
+            an_ape_in=an_in*r_aper_as
+            an_ape_out=an_out*r_aper_as
 
 
+        # Convert to numpy arrays if needed
+        data = np.asarray(data)
+        datan = np.asarray(datan)
 
+        # Optional: force numeric dtype (float), if appropriate
+        data = data.astype(float)
+        datan = datan.astype(float)
+
+        mask = (np.isinf(data) | np.isnan(data) | np.isinf(datan) | np.isnan(datan))
 
         mask=((np.isinf(data)) | (np.isnan(data)) | (np.isinf(datan)) | (np.isnan(datan)))
         data=data*counts
@@ -745,7 +785,6 @@ def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixs
         print(f'sources befoe: {len(combined_catalog)}')
 
 
-
         bkg_ratio_path = os.path.join(source_rem_dir, '_CDDfs'+str(4).rjust(4, '0')+'BKGDRATIO.fits') #4pix bkg ratio
 
         with fits.open(bkg_ratio_path, ignore_missing=True) as hdul:
@@ -756,7 +795,7 @@ def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixs
         aper_stats_2_bkg_ratio = ApertureStats(bkg_ratio_img, apertures_3px, wcs=w, error=datan, sigma_clip=None, mask=mask)
         # bkg_thresh = np.percentile(bkg_ratio_img, 97)
 
-        s2ncut_combined_catalog = combined_catalog[((CI_1pix3pix <= 1.6) & (aper_stats_2_bkg_ratio.max >= 1.5)) | ((phot_1['aperture_sum'] > np.percentile(phot_1['aperture_sum'], 97)) & (CI_1pix3pix <= 1.9))] #why 97?
+        s2ncut_combined_catalog = combined_catalog[((CI_1pix3pix <= 1.2) & (aper_stats_2_bkg_ratio.max >= 2)) | ((phot_1['aperture_sum'] > np.percentile(phot_1['aperture_sum'], 97)) & (CI_1pix3pix <= 1.9))] #why 97? #((CI_1pix3pix <= 1.6) & (aper_stats_2_bkg_ratio.max >= 1.5))
         print(f'median of max is: {np.median(aper_stats_2_bkg_ratio.max)}')
 
         print(f'sources after: {len( s2ncut_combined_catalog)}')

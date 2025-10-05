@@ -135,7 +135,7 @@ def decompose(image_path, label_folder_path, base_dir, label, distance_mpc, res,
                         header_in['NAXIS2'] = image_in.shape[0]
 
             if Source_Rem: 
-                image_in = image_in[0] #account for cube output from julia cloudclean
+                image_in = image_in[1] #account for cube output from julia cloudclean
 
             header_in = clean_header(header_in) 
             hdu.info()
@@ -194,8 +194,8 @@ def decompose(image_path, label_folder_path, base_dir, label, distance_mpc, res,
 
             imagepath = get_fits_file_path(os.path.join(base_dir, "OriginalImages"), label)
             with fits.open(imagepath) as hdu:
-                header = hdu[0].header
-                data = hdu[0].data
+                header = hdu[1].header
+                data = np.array(hdu[1].data)
 
             image_now[np.isnan(data)] = 0
             

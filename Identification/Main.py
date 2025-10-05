@@ -34,8 +34,8 @@ if __name__ == "__main__":
     batch_path = Path(r"C:\Users\jhoffm72\Downloads\batch_soax_v3.7.0.exe")
 
     #For Julia soure removal
-    julia_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\PHANGSDustFill\Identification\JuliaCloudClean.ipynb")
-    julia_out_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\PHANGSDustFill\Identification\JuliaCloudClean_Output.ipynb")
+    julia_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\PHANGSDustFill\Identification\JuliaCloudClean_Output1.ipynb")
+    julia_out_path = julia_path
 
     #SOAX params
     min_snake_length_ss = 25
@@ -43,15 +43,15 @@ if __name__ == "__main__":
     #Non SOAX params
     probability_threshold = .3
     min_area_pix = 10
-    noise_min = 10**-2 #.55 for IC5146
-    flatten_perc = 90 #99 for IC5146
-    min_intensity = 0
+    noise_min = 10**-2 #.55 for IC5146, 10**-2 for F770W
+    flatten_perc = 90 #99 for IC5146, 90 for F770W
+    min_intensity = 0 #0 for F770W, 4 for hersch
 #   ____________________________________________________________________________________________
 #   ____________________________________________________________________________________________
 
     start = time.time() #get start time
 
-    # mainFuncs.clearAllFiles(base_dir, csv_path, param_file_path) #clear all files
+    # mainFuncs.clearAllFiles(base_dir, csv_path, param_file_path) #clear all files...fix to not delete orig images!
     mainFuncs.renameFitsFiles(base_dir, csv_path) #apply naming convention to original files
     mainFuncs.createDirectoryStructure(base_dir, csv_path)  #Create Directory and sub folders
 
@@ -62,7 +62,7 @@ if __name__ == "__main__":
         if not os.path.isdir(label_folder_path):  # Skip if it's not a directory`       `
             continue
 
-        if(label != 'OriginalMiriImages' and label != "Figures" and "0628_F770W" in label): 
+        if(label != 'OriginalMiriImages' and label != "Figures" and  "ngc0628_F770W" in label): 
 
             distance_Mpc,res, pixscale, MJysr, Band, min_power, max_power, Rem_sources = mainFuncs.getInfo(label, csv_path) #get relevant information for image from csv file
 
@@ -86,9 +86,9 @@ if __name__ == "__main__":
 
                 #Necessary functions in order to produce a skeletonized filament map
                 filMap.scaleBkgSubDivRMSMap(write_fits = True)
-                # filMap.runSoaxThreads(min_snake_length_ss, min_fg_int, batch_path) #Create 10 soax FITS files
-                # filMap.createComposite(write_fits = True) #Combine all 10 Fits files
-                # filMap.getSyntheticFilamentMap( write_fits = True) # Creates a synthetic map of all filaments at a single scale from the blurred probability_map. set_as_composite = True. 
+                filMap.runSoaxThreads(min_snake_length_ss, min_fg_int, batch_path) #Create 10 soax FITS files
+                filMap.createComposite(write_fits = True) #Combine all 10 Fits files
+                filMap.getSyntheticFilamentMap(alphaCO_tag = 'SL24', use_dynamic_alphaCO = True, extract_Properties = True, write_fits = True) # Creates a synthetic map of all filaments at a single scale from the blurred probability_map. set_as_composite = True. 
 
                 #Extra Processing
                 # filMap.blurComposite(set_blur_as_prob = True, write_fits = True) #Blur the composite

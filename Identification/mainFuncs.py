@@ -25,6 +25,8 @@ def getMJysr(bandstr, inststr):
     if bandstr=='F200W': sigma_MJysr=0.68
     if bandstr=='F187N': sigma_MJysr=1.00 #TBD using Cycle 2, also do the others above change for Cycle 2??
     if bandstr=='F150W': sigma_MJysr=1.00 #TBD using Cycle 2
+    else:
+        sigma_MJysr = 0
     return sigma_MJysr 
 
 

@@ -11,7 +11,8 @@ def Remove(julia_path, julia_out_path, mask_path, orig_image_path, label_folder_
         parameters={
             "mask_path": mask_path,
             "image_path": orig_image_path,
-            "save_path": save_path
+            "save_path": save_path,
+            "widx": 275
         },
         kernel_name="julia-1.11"
     )
