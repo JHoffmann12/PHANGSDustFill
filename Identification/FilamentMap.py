@@ -1433,7 +1433,7 @@ class FilamentMap:
             imgNew = np.rint(imgNew).astype(int)
 
             # Extract coordinates for each label
-            for lab in range(1, label):
+            for lab in range(1, label, 5):
                 white_mask = (imgNew >= lab - 1) & (imgNew <= lab + 1)
                 if not np.any(white_mask):
                     continue # skip empty regions (possible after reprojection)
