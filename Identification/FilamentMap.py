@@ -1165,9 +1165,9 @@ class FilamentMap:
     
 
 
-    def getRegionData(self):
+    def getRegionData(self, use_Regions):
         # Look through files in region directory
-        dir = os.path.join(self.BaseDir, "masks_v5_simple")
+        dir = use_Regions
         for file in os.listdir(dir):
             galaxy = self.Label.split("_")
             galaxy = galaxy[0]
@@ -1214,7 +1214,7 @@ class FilamentMap:
 
 
 
-    def getSyntheticFilamentMap(self, alphaCO_tag, use_dynamic_alphaCO = True, extract_Properties = True, write_fits = True):
+    def getSyntheticFilamentMap(self, alphaCO_tag, use_dynamic_alphaCO = None, use_Regions = None, extract_Properties = True, write_fits = True):
 
         """
         Create a map of estimated filaments
@@ -1382,9 +1382,9 @@ class FilamentMap:
                 I_CO__2_1_16pc[~valid_mask_1] = 0
 
                 # Use PHANGS alphaCO
-                if use_dynamic_alphaCO:
+                if use_dynamic_alphaCO is not None:
                     print(f'Using dynamic alphaCO')
-                    dir_path = os.path.join(self.BaseDir, "PHANGS_alphaCO_conversion_factor_maps")
+                    dir_path = use_dynamic_alphaCO
                     found_alphaCO = False
 
                     for file in os.listdir(dir_path):
@@ -1457,7 +1457,7 @@ class FilamentMap:
 
 
             print('Reprojecting dictionary...')
-            data_new = self.getRegionData()
+            data_new = self.getRegionData(use_Regions)
 
             # Create a labeled mask for all filaments
             segment_info_reprojected = {}
