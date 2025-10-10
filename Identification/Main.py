@@ -24,10 +24,6 @@ if __name__ == "__main__":
 #   ____________________________________________________________________________________________
 
     #paths
-    # base_dir = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data")
-    # csv_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data\ImageData.xlsx")
-    # param_file_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data\SoaxParams.txt")
-    # batch_path = Path(r"C:\Users\jhoffm72\Downloads\batch_soax_v3.7.0.exe")
     base_dir = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data")
     csv_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data\ImageData.xlsx")
     param_file_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data\SoaxParams.txt")
@@ -36,6 +32,10 @@ if __name__ == "__main__":
     #For Julia soure removal
     julia_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\PHANGSDustFill\Identification\JuliaCloudClean_Output1.ipynb")
     julia_out_path = julia_path
+
+    #Additional features
+    region_dir_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data\masks_v5_simple")
+    dynamic_alphaCO_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data\PHANGS_alphaCO_conversion_factor_maps")
 
     #SOAX params
     min_snake_length_ss = 25
@@ -88,7 +88,7 @@ if __name__ == "__main__":
                 filMap.scaleBkgSubDivRMSMap(write_fits = True)
                 filMap.runSoaxThreads(min_snake_length_ss, min_fg_int, batch_path) #Create 10 soax FITS files
                 filMap.createComposite(write_fits = True) #Combine all 10 Fits files
-                # filMap.getSyntheticFilamentMap(alphaCO_tag = 'SL24', use_dynamic_alphaCO = True, extract_Properties = True, write_fits = True) # Creates a synthetic map of all filaments at a single scale from the blurred probability_map. set_as_composite = True. 
+                filMap.getSyntheticFilamentMap(alphaCO_tag = 'SL24', use_dynamic_alphaCO = dynamic_alphaCO_path, use_Regions = region_dir_path, extract_Properties = True, write_fits = True) # Creates a synthetic map of all filaments at a single scale from the blurred probability_map. set_as_composite = True. 
 
                 #Extra Processing
                 filMap.blurComposite(set_blur_as_prob = True, write_fits = True) #Blur the composite
