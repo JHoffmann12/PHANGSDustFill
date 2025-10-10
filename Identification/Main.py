@@ -62,7 +62,7 @@ if __name__ == "__main__":
         if not os.path.isdir(label_folder_path):  # Skip if it's not a directory`       `
             continue
 
-        if(label != 'OriginalMiriImages' and label != "Figures" and  "ngc1365_F770W" in label): 
+        if(label != 'OriginalMiriImages' and label != "Figures" and  "ngc0628_F770W" in label): 
 
             distance_Mpc,res, pixscale, MJysr, Band, min_power, max_power, Rem_sources = mainFuncs.getInfo(label, csv_path) #get relevant information for image from csv file
 

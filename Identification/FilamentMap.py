@@ -1287,21 +1287,51 @@ class FilamentMap:
         try: 
 
             fil_centers = IntersectsRemoved
+#____________________________________________________________________________________
 
             #Step 2: Create a filament dictionary 
+
+            data_new = self.getRegionData(use_Regions)
+            img = np.zeros_like(self.BlockData, dtype=float) # make sure it's numeric for reproject_interp
+            label_val = 1
+
             print('creating dictionary')
             segment_map = detect_sources(fil_centers, threshold=.5, npixels=10)
             segm_deblend = deblend_sources(fil_centers, segment_map, npixels=10, nlevels=32, contrast=0.001,progress_bar=False)
 
-            segment_info = {}
             for label in segm_deblend.labels:
                 mask = segm_deblend.data == label # Find pixels that belong to this segment
                 coords = np.argwhere(mask)  # shape (N, 2), where each entry is (y, x)
-                pixel_list = []
                 for (y, x) in coords:
-                    pixel_list.append((x, y))  # (x, y, value, Npix)
+                    img[y, x] = label_val
+                label_val+=10
 
-                segment_info[label] = (pixel_list)
+            # Reproject with interpolation (can blur labels slightly)
+            imgNew, _ = reproject_exact((img, self.BlockHeader), self.OrigHeader, shape_out=self.OrigData.shape)
+            imgNew = self._cropNanBorder(imgNew, self.OrigData.shape)
+
+            # Create a labeled mask for all filaments
+            segment_info_reprojected = {}
+            imgNew = np.rint(imgNew).astype(int)
+
+            # Extract coordinates for each label
+            for lab in range(1, label, 10):
+                white_mask = (imgNew >= lab -1) & (imgNew <= lab + 1)
+                if not np.any(white_mask):
+                    continue 
+                coords = np.argwhere(white_mask)
+                coords_list = [(int(x), int(y)) for y, x in coords]
+                region = self.getRegion(white_mask, data_new)
+                segment_info_reprojected[lab] = (coords_list, region)
+            print('Dictionary reprojected.')
+
+
+            # Debugging
+            hdu = fits.PrimaryHDU(imgNew, header=self.OrigHeader)
+            hdu.writeto('imgNew_reprojected.fits', overwrite=True)
+            print("Saved reprojected filament map to imgNew_reprojected.fits")
+
+
         #__________________________________________________________________________________
 
 
@@ -1455,39 +1485,6 @@ class FilamentMap:
                 else:
                     Molecular_Mass = 5.5 * I_CO__2_1_16pc  # Default value
 
-
-            print('Reprojecting dictionary...')
-            data_new = self.getRegionData(use_Regions)
-
-            # Create a labeled mask for all filaments
-            segment_info_reprojected = {}
-            img = np.zeros_like(self.BlockData, dtype=float) # make sure it's numeric for reproject_interp
-            label = 1
-
-            for fil_id, pix_list in segment_info.items():
-                for x, y in pix_list: # unpack directly for readability
-                    img[y, x] = label
-                label += 5 #increment to make sure labels dont blur in reprojection
-
-            # Reproject with interpolation (can blur labels slightly)
-            imgNew, _ = reproject_interp((img, self.BlockHeader), self.OrigHeader, shape_out=self.OrigData.shape)
-            imgNew = self._cropNanBorder(imgNew, self.OrigData.shape)
-
-            # Because interpolation may produce fractional values near boundaries,
-            # we round to the nearest integer label:
-            imgNew = np.rint(imgNew).astype(int)
-
-            # Extract coordinates for each label
-            for lab in range(1, label, 5):
-                white_mask = (imgNew >= lab - 1) & (imgNew <= lab + 1)
-                if not np.any(white_mask):
-                    continue # skip empty regions (possible after reprojection)
-                coords = np.argwhere(white_mask)
-                coords_list = [(int(x), int(y)) for y, x in coords]
-                region = self.getRegion(white_mask, data_new)
-                segment_info_reprojected[lab] = (coords_list, region)
-
-            print('Dictionary reprojected.')
 
             #step 6: Save Data
             print('converting to csv data')
