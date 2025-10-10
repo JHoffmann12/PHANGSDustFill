@@ -1,4 +1,4 @@
-# PHILPHANGS: Filament Identification Pipeline
+# FILPHANGS: Filament Identification Pipeline
 
 Associated Paper: Coming Soon!
 
