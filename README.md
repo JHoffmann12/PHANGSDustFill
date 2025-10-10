@@ -1,11 +1,11 @@
-# PHILPHANGS: Filament Identofication Pipeline
+# PHILPHANGS: Filament Identification Pipeline
 
 Associated Paper: Coming Soon!
 
 ### Setup
 
 FilPHANGS is an extensive pipeleine that relies on the filament identification algorithm SOAX. The first step is to download the SOAX batch file, found here: https://www.lehigh.edu/~div206/soax/downloads.html. 
-It is currently available for Windows and Mac OS High Sierrra, but is actively being adapted to run on newer macs. After SOAX is installed, Julia will also need to be installed in order to use the cloud clean source removal: https://github.com/andrew-saydjari/CloudClean.jl. You do not need to install this repository, only Julia. Julia can be downloaded from this page: https://julialang.org/downloads/. 
+It is currently available for Windows and Mac OS High Sierrra, but is actively being adapted to run on newer mac OS. After SOAX is installed, Julia will also need to be installed in order to use the cloud clean source removal: https://github.com/andrew-saydjari/CloudClean.jl. You do not need to install this repository, only Julia. Julia can be downloaded from this page: https://julialang.org/downloads/. 
 
 After SOAX and Julia are downloaded, clone the repository and set up a FilPHANGS virtual environment using Conda. In this virtual environment, type 
 ``` pip install -r requirements.txt ``` in terminal to automatically install required libraries. 
@@ -20,7 +20,7 @@ FilPHANGS_base_directory/
 └── Figures/
 ```
 
-OriginalImages contains all of the original images that you wish to process with FilPHANGS. It is required that the image names contain the image label (i.e. ngc0628) and the image band (i.e. F770W) seperated by an underscore. Other descriptors can also be in the name, but will be overwritten later on. The CSV_Data contains information on each galaxy that will be processed, and is referenced repeatedly by the software during run time. Soax Parameters.txt contains the SOAX parameters we determined to be best. 
+OriginalImages contains all of the original images that you wish to process with FilPHANGS. It is required that the image names contain the image label (i.e. ngc0628) and the image band (i.e. F770W) seperated by an underscore. Other descriptors can also be in the name, but will be overwritten later on. The CSV_Data contains information on each galaxy that will be processed, and is referenced repeatedly by the software during run time. Soax_Parameters.txt contains the SOAX parameters we determined to be best. 
 
 Now we are ready to run FilPHANGS. Open Main.py and update the file paths at the top of the file to point to the correct locations. After this is done, FilPHANSG is ready to go! There are two functions which are immediately called, mainFuncs.renameFitsFiles() and mainFuncs.createDirectoryStructure(). These two functions will standardize all image names in the OriginalImages folder and will fill out the directory structure. Specifically, each image in OriginalImages will get its own output sub-directory, detailed below for an example image: 
 
