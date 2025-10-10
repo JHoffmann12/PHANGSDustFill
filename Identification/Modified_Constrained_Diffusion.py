@@ -44,6 +44,37 @@ import copy
 plt.rcParams['figure.figsize'] = [15, 15]
 
 
+def openFits(path):
+    with fits.open(path) as hdu:
+        try:
+            image_in = hdu[0].data
+            header_in = hdu[0].header
+        except IndexError:
+            image_in = hdu[1].data
+            header_in = hdu[1].header
+        try:
+            min_dim_img = np.min([header_in['NAXIS1'], header_in['NAXIS2']])
+        except KeyError:
+            try: 
+                header_in['NAXIS1'] = image_in.shape[1]
+                header_in['NAXIS2'] = image_in.shape[0]
+            except AttributeError: 
+                image_in = hdu[1].data
+                header_in = hdu[1].header
+                try: 
+                    min_dim_img = np.min([header_in['NAXIS1'], header_in['NAXIS2']])
+                except KeyError: 
+                    header_in['NAXIS1'] = image_in.shape[1]
+                    header_in['NAXIS2'] = image_in.shape[0]
+    return image_in, header_in, min_dim_img
+    
+
+
+
+
+
+
+
 def gaussian_2d(xy, x0, y0, sigma, amplitude, offset):
 
     """
@@ -112,33 +143,12 @@ def decompose(image_path, label_folder_path, base_dir, label, distance_mpc, res,
         imagepath = image_path
 
         # Open FITS file and handle various erros
-        with fits.open(imagepath) as hdu:
-            try:
-                image_in = hdu[0].data
-                header_in = hdu[0].header
-            except IndexError:
-                image_in = hdu[1].data
-                header_in = hdu[1].header
-            try:
-                min_dim_img = np.min([header_in['NAXIS1'], header_in['NAXIS2']])
-            except KeyError:
-                try: 
-                    header_in['NAXIS1'] = image_in.shape[1]
-                    header_in['NAXIS2'] = image_in.shape[0]
-                except AttributeError: 
-                    image_in = hdu[1].data
-                    header_in = hdu[1].header
-                    try: 
-                        min_dim_img = np.min([header_in['NAXIS1'], header_in['NAXIS2']])
-                    except KeyError: 
-                        header_in['NAXIS1'] = image_in.shape[1]
-                        header_in['NAXIS2'] = image_in.shape[0]
+        image_in, header_in, min_dim_img = openFits(imagepath)
 
-            if Source_Rem: 
-                image_in = image_in[1] #account for cube output from julia cloudclean
+        if Source_Rem: 
+            image_in = image_in[1] #account for cube output from julia cloudclean
 
             header_in = clean_header(header_in) 
-            hdu.info()
 
         # image_in =  extinctionEqualization(imagepath, image_in) #equalize if an extinction image
 
@@ -193,9 +203,8 @@ def decompose(image_path, label_folder_path, base_dir, label, distance_mpc, res,
 
 
             imagepath = get_fits_file_path(os.path.join(base_dir, "OriginalImages"), label)
-            with fits.open(imagepath) as hdu:
-                header = hdu[1].header
-                data = np.array(hdu[1].data)
+            data, header, _ = openFits(imagepath)
+            data  = np.array(image_now.astype(np.float32))
 
             image_now[np.isnan(data)] = 0
             

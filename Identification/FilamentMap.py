@@ -940,14 +940,14 @@ class FilamentMap:
 
 
 
-    def applyProbabilityThresholdAndSkeletonize(self, probability_threshold, min_area_pix, write_fits = True):
+    def applyProbabilityThresholdAndSkeletonize(self, probability_threshold, min_len_pix, write_fits = True):
 
         """
         Given the blurred composite, threshold the image. 
 
         Parameters:
         - probability_threshold (float): Minimum percentage between 0 and 1 that a pixel must have in order for it to be considered "real". 
-        - min_area_pix (int): minimum area in pixels a filament must occupy. 
+        - min_len_pix (int): minimum area in pixels a filament must occupy. 
         - write_fits (bool): Save the cleaned composite as a fits file
 
         Returns: 
@@ -966,21 +966,45 @@ class FilamentMap:
         skelComposite = skeletonize(threshComposite)
         skelComposite = skelComposite.astype(np.uint8)
 
-        #remove small filaments
-        img = np.array(skelComposite)
-        labels, stats, num_labels = AF.identify_connected_components(np.array(skelComposite))
-        small_areas = AF.sort_label_id(num_labels, stats, min_area_pix)
-        for label_id in small_areas:
+        # #remove small filaments
+        # img = np.array(skelComposite)
+        # labels, stats, num_labels = AF.identify_connected_components(np.array(skelComposite))
+        # small_areas = AF.sort_label_id(num_labels, stats, min_len_pix)
+        # for label_id in small_areas:
 
-            # Extract the bounding box coordinates
-            left = stats[label_id, cv2.CC_STAT_LEFT]
-            top = stats[label_id, cv2.CC_STAT_TOP]
-            width = stats[label_id, cv2.CC_STAT_WIDTH]
-            height = stats[label_id, cv2.CC_STAT_HEIGHT]
+        #     # Extract the bounding box coordinates
+        #     left = stats[label_id, cv2.CC_STAT_LEFT]
+        #     top = stats[label_id, cv2.CC_STAT_TOP]
+        #     width = stats[label_id, cv2.CC_STAT_WIDTH]
+        #     height = stats[label_id, cv2.CC_STAT_HEIGHT]
 
-            for x in range(width):
-                for y in range(height):
-                    img[top:top+height, left:left+width] = 0
+        #     for x in range(width):
+        #         for y in range(height):
+        #             img[top:top+height, left:left+width] = 0
+
+        # skelComposite = img.astype(np.uint8)
+
+
+        # Identify connected components
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+            np.uint8(skelComposite), connectivity=8
+        )
+
+        img = np.copy(skelComposite)
+
+        for label_id in range(1, num_labels):  # skip background (0)
+            # Extract component mask
+            component_mask = (labels == label_id)
+
+            # Skeletonize the component to measure its length
+            skeleton = skeletonize(component_mask)
+
+            # Compute filament length (number of skeleton pixels)
+            filament_length = np.sum(skeleton)
+
+            # Remove component if it's shorter than threshold
+            if filament_length < min_len_pix:
+                img[component_mask] = 0
 
         skelComposite = img.astype(np.uint8)
 
@@ -994,7 +1018,7 @@ class FilamentMap:
         
         return skelComposite
 
-    def removeJunctions(self, skelComposite, probability_threshold, min_area_pix, set_as_composite= False, write_fits = True):
+    def removeJunctions(self, skelComposite, probability_threshold, min_len_pix, set_as_composite= False, write_fits = True):
 
         """
         Given the thresholded composite, remove junctions and remove small areas. 
@@ -1002,7 +1026,7 @@ class FilamentMap:
         Parameters:
         -skelComposite (float): skeletonized data to remove junctions and small filaments from
         - probability_threshold (float): Minimum percentage between 0 and 1 that a pixel must have in order for it to be considered "real". 
-        - min_area_pix (int): Minimum area in pixels that a box surrounding a filament must cover. 
+        - min_len_pix (int): Minimum area in pixels that a box surrounding a filament must cover. 
         -set_as_composite (bool): set the new image as the composite image. Overrides the blurred image as the composite. Set to false to test many probability thresholds at once. 
         write_fits (bool): Save the cleaned composite as a fits file
         """
@@ -1012,21 +1036,42 @@ class FilamentMap:
         junctions = AF.getSkeletonIntersection(np.array(255*skelComposite))
         IntersectsRemoved = AF.removeJunctions(junctions, skelComposite, dot_size = 3)
 
-        #remove small filaments
-        labels, stats, num_labels = AF.identify_connected_components(np.array(IntersectsRemoved))
-        small_areas = AF.sort_label_id(num_labels, stats, min_area_pix)
-        img = np.array(IntersectsRemoved)
-        for label_id in small_areas:
+        # #remove small filaments
+        # labels, stats, num_labels = AF.identify_connected_components(np.array(IntersectsRemoved))
+        # small_areas = AF.sort_label_id(num_labels, stats, min_len_pix)
+        # img = np.array(IntersectsRemoved)
+        # for label_id in small_areas:
 
-            # Extract the bounding box coordinates
-            left = stats[label_id, cv2.CC_STAT_LEFT]
-            top = stats[label_id, cv2.CC_STAT_TOP]
-            width = stats[label_id, cv2.CC_STAT_WIDTH]
-            height = stats[label_id, cv2.CC_STAT_HEIGHT]
+        #     # Extract the bounding box coordinates
+        #     left = stats[label_id, cv2.CC_STAT_LEFT]
+        #     top = stats[label_id, cv2.CC_STAT_TOP]
+        #     width = stats[label_id, cv2.CC_STAT_WIDTH]
+        #     height = stats[label_id, cv2.CC_STAT_HEIGHT]
 
-            for x in range(width):
-                for y in range(height):
-                    img[top:top+height, left:left+width] = 0
+        #     for x in range(width):
+        #         for y in range(height):
+        #             img[top:top+height, left:left+width] = 0
+
+        # Identify connected components
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+            np.uint8(IntersectsRemoved), connectivity=8
+        )
+
+        img = np.copy(IntersectsRemoved)
+
+        for label_id in range(1, num_labels):  # skip background (0)
+            # Extract component mask
+            component_mask = (labels == label_id)
+
+            # Skeletonize the component to measure its length
+            skeleton = skeletonize(component_mask)
+
+            # Compute filament length (number of skeleton pixels)
+            filament_length = np.sum(skeleton)
+
+            # Remove component if it's shorter than threshold
+            if filament_length < min_len_pix:
+                img[component_mask] = 0
 
         if(set_as_composite):
             self.Composite = img
@@ -1364,13 +1409,13 @@ class FilamentMap:
                             
                             # debugging step
 
-                            fits.writeto("Molecular_Mass.fits", Molecular_Mass, overwrite=True)
-                            fits.writeto("alphaCO.fits", alphaCO, overwrite=True)
-                            fits.writeto("I_CO_2_1_16pc.fits", I_CO__2_1_16pc, overwrite=True)
-                            fits.writeto("nan_mask.fits", nan_mask.astype(np.uint8), overwrite=True)  
+                            # fits.writeto("Molecular_Mass.fits", Molecular_Mass, overwrite=True)
+                            # fits.writeto("alphaCO.fits", alphaCO, overwrite=True)
+                            # fits.writeto("I_CO_2_1_16pc.fits", I_CO__2_1_16pc, overwrite=True)
+                            # fits.writeto("nan_mask.fits", nan_mask.astype(np.uint8), overwrite=True)  
                             # (save mask as 0/1 integers so it’s more readable)
 
-                            print("Saved Molecular_Mass, alphaCO, I_CO_2_1_16pc, and nan_mask as FITS files.")
+                            # print("Saved Molecular_Mass, alphaCO, I_CO_2_1_16pc, and nan_mask as FITS files.")
 
 
                             print('Molecular Mass computed')

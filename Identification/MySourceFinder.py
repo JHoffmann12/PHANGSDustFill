@@ -841,3 +841,53 @@ def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixs
 
         print(f"Mask saved to: {mask_save_path}")
         return mask_save_path
+    
+
+def CloudCleanCheck(image_path, mask_save_path, orig_image_path, label_folder_path, thresh = 10):
+    source_removed_image, _ = openFits(image_path)
+    source_removed_image = source_removed_image[1] #Julia output multidimensional 
+    masked_sources, _ = openFits(mask_save_path)
+    orig_img, orig_header = openFits(orig_image_path)
+    
+    count = 0
+    radius = 6 #freee to change
+    mask = masked_sources.astype(bool)
+    infilled_img = np.copy(source_removed_image)
+
+    rows, cols = source_removed_image.shape
+
+    for i in range(rows):
+        for j in range(cols):
+            if mask[i, j]:
+                # Define local window boundaries
+                r0, r1 = max(0, i - radius), min(rows, i + radius + 1)
+                c0, c1 = max(0, j - radius), min(cols, j + radius + 1)
+
+                # Extract local region
+                window = source_removed_image[r0:r1, c0:c1]
+
+                # Infill with median of available neighbors
+                val1 = np.mean(window[masked_sources[r0:r1, c0:c1] == 0])
+                val2 = np.mean(window[masked_sources[r0:r1, c0:c1] == 1])
+                if np.abs(val2 - val1) > thresh*val1 or np.std(window[masked_sources[r0:r1, c0:c1] == 1]) > thresh: 
+                    non_src_vals = window[masked_sources[r0:r1, c0:c1] == 0]
+                    infilled_img[i, j] = np.median(non_src_vals)
+                    count+=1
+
+    save_path = os.path.join(label_folder_path, "Source_Removal")
+    save_path = os.path.join(save_path, f"OriginalImageSourcesRemoved_MEDIAN_INFILL_{count}_Pix.fits")
+    hdu = fits.PrimaryHDU(infilled_img, header=orig_header)
+    hdu.writeto(save_path, overwrite=True)
+    return save_path
+
+
+def openFits(path):
+    with fits.open(path) as hdu:
+        try:
+            image_in = hdu[0].data
+            header_in = hdu[0].header
+        except IndexError:
+            image_in = hdu[1].data
+            header_in = hdu[1].header
+    return image_in, header_in
+    

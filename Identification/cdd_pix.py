@@ -74,10 +74,32 @@ def decompose(label_folder_path, base_dir, label, numscales=3):
         source_rem_dir = os.path.join(label_folder_path, "Source_Removal\CDD_Pix")
 
         orig_image_path = get_fits_file_path(os.path.join(base_dir, "OriginalImages"), label)
+        
+        with fits.open( orig_image_path) as hdu:
+            try:
+                image = hdu[0].data
+                header = hdu[0].header
+                if image is None:
+                    image = hdu[1].data
+                    header = hdu[1].header         
+            except IndexError:
+                image = hdu[1].data
+                header = hdu[1].header
+            try:
+                min_dim_img = np.min([header['NAXIS1'], header['NAXIS2']])
+            except KeyError:
+                try: 
+                    header['NAXIS1'] = image.shape[1]
+                    header['NAXIS2'] = image.shape[0]
+                except AttributeError: 
+                    image = hdu[1].data
+                    header = hdu[1].header
+                    try: 
+                        min_dim_img = np.min([header['NAXIS1'], header['NAXIS2']])
+                    except KeyError: 
+                        header['NAXIS1'] = image.shape[1]
+                        header['NAXIS2'] = image.shape[0]
 
-        with fits.open(orig_image_path, ignore_missing=True) as hdul:
-            image = np.array(hdul[0].data)  # Assuming the image data is in the primary HDU
-            header = hdul[0].header
 
         result, residual = constrained_diffusion_decomposition(image, e_rel=3e-2,max_n=numscales, sm_mode='reflect')  #for YMC stuff keep max_n=numscales small for execution speed and since full decomp irrelevent
 
