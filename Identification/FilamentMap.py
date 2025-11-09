@@ -1,14 +1,11 @@
 #Filament map class to produce skeletonized filament maps of astrophysical images
 
 #imports 
-# imports
-import astropy.units as u
-from astropy.io import fits
 from astropy.nddata.utils import Cutout2D
 from astropy.stats import SigmaClip, sigma_clipped_stats
 from astropy.table import Table, QTable
 from astropy.wcs import WCS
-
+from astropy.io import fits
 from pathlib import Path
 import os
 from os import path
@@ -162,7 +159,8 @@ class FilamentMap:
             image=image.astype('uint16')
 
             # Equalization
-            radius = int(Scale * 2 + 1) #Make the radius 2 * extracted_scale
+            radius = int(Scale * 2 + 1) #Make box 2% of smaller image dimension...appears to work well
+            #make the radius 2 * extracted_scale
             footprint = disk(radius)  # disk of radius for local hist.eq
             processed_img = rank.equalize(image, footprint, mask=maskfoot)
             outhdu = fits.PrimaryHDU(data=processed_img)
@@ -189,7 +187,6 @@ class FilamentMap:
         
         return processed_img
             
-
     def setBlockFactor(self, bf):
         self.BlockFactor = bf
     
@@ -260,7 +257,6 @@ class FilamentMap:
     def _getBlankRegionMask(self):
         """
         Generate a mask to hide large vacant regions as well as the image border.
-        
         Returns: 
         - a mask, where true indicates a region to be masked.
         """
@@ -400,11 +396,12 @@ class FilamentMap:
                 self.BlockHeader['CDELT1'] = (self.OrigHeader['CDELT1']) * self.BlockFactor
                 self.BlockHeader['CDELT2'] = (self.OrigHeader['CDELT2']) * self.BlockFactor
             except KeyError:
-                # Extract the CD values
+                    # Extract the CD values
                 CD1_1 = self.BlockHeader['CD1_1']
                 CD1_2 = self.BlockHeader['CD1_2']
                 CD2_1 = self.BlockHeader['CD2_1']
                 CD2_2 = self.BlockHeader['CD2_2']
+                
                 
                 # Add the CDELT values to the header
                 self.BlockHeader['CDELT1'] = CD1_1 * self.BlockFactor
@@ -419,6 +416,9 @@ class FilamentMap:
             reprojected_data = self.reprojectWrapper(self.OrigData, self.OrigHeader, self.BlockHeader, self.BlockData)
             self.BlankRegionMask = self.reprojectWrapper(self.BlankRegionMask, self.OrigHeader,self.BlockHeader, self.BlockData)
 
+            # Crop NaN border 
+            self.BlockData = self._cropNanBorder(reprojected_data, (np.shape(self.BlockData)))
+            self.BlankRegionMask = self._cropNanBorder(self.BlankRegionMask, (np.shape(self.BlockData)))
             assert(np.shape(self.BlankRegionMask)==np.shape(self.BlockData))
             self.BlankRegionMask = self.BlankRegionMask == 1 #boolean mask, True indicates pixels to mask
         else:
@@ -492,10 +492,12 @@ class FilamentMap:
         stretch_start = 1.75
         stretch_stop = 2.5
 
+
         #adjust soax length param to account for blocking
         new_length = round(min_snake_length_ss - ((math.sqrt(self.BlockFactor))*4))
         self.updateMinimumSnakeLength(new_length, min_fg_int)
-        print('Starting Soax Threads')
+        print('Starting Threads')
+
 
         #begin 5 threads to speed up soax
         threads = []
@@ -1297,7 +1299,7 @@ class FilamentMap:
 
             data_new = self.getRegionData(use_Regions)
             img = np.zeros_like(self.BlockData, dtype=float) # make sure it's numeric for reproject_interp
-            label_val = 2
+            label_val = 3
 
             print('creating dictionary')
             segment_map = detect_sources(fil_centers, threshold=.5, npixels=10)
@@ -1305,30 +1307,34 @@ class FilamentMap:
 
             for label in segm_deblend.labels:
                 mask = segm_deblend.data == label # Find pixels that belong to this segment
-                coords = np.argwhere(mask)  # shape (N, 2), where each entry is (y, x)
-                for (y, x) in coords:
-                    img[y, x] = label_val
+                img[mask] = label_val
                 label_val+=10
 
             # Reproject with interpolation (can blur labels slightly)
-            # imgNew, _ = reproject_exact((img, self.BlockHeader), self.OrigHeader, shape_out=self.OrigData.shape)
-            # imgNew = self._cropNanBorder(imgNew, self.OrigData.shape)
-            imgNew = self. reprojectWrapper(img, self.BlockHeader, self.OrigHeader, self.OrigData) 
+            imgNew, _ = reproject_exact((img, self.BlockHeader), self.OrigHeader, shape_out=self.OrigData.shape)
+            imgNew = self._cropNanBorder(imgNew, self.OrigData.shape)
+
 
             # Create a labeled mask for all filaments
             segment_info_reprojected = {}
             imgNew = np.rint(imgNew).astype(int)
 
+            print(f'max label is: {label_val}')
+
             # Extract coordinates for each label
-            for lab in range(1, label, 10):
+            for lab in range(3, label_val + 1, 10):
                 white_mask = (imgNew >= lab -1) & (imgNew <= lab + 1)
                 if not np.any(white_mask):
                     continue 
                 coords = np.argwhere(white_mask)
+                img_skel = skeletonize(white_mask.astype(bool))
+                length = len(np.argwhere(img_skel)) #determine length from skeletonized filament
                 coords_list = [(int(x), int(y)) for y, x in coords]
                 region = self.getRegion(white_mask, data_new)
-                segment_info_reprojected[lab] = (coords_list, region)
+                segment_info_reprojected[lab] = (coords_list, length, region)
+
             print('Dictionary reprojected.')
+            print(np.max(segment_info_reprojected.keys()))
 
             # Debugging
             hdu = fits.PrimaryHDU(imgNew, header=self.OrigHeader)
@@ -1336,8 +1342,10 @@ class FilamentMap:
             print("Saved reprojected filament map to imgNew_reprojected.fits")
 
 
+        #__________________________________________________________________________________
 
-            #step 8: Define PSF 
+
+            #step 6: Define PSF 
             print('PSF time')
             psf_model = CircularGaussianPRF(flux=1, fwhm=fwhmval) #No longer divide fwhmval/2.35
             psf_model.x_0.fixed = True #allowing this to vary when x_coords, y_coords given no intentional offset shows most would only move by ~0.125 pix, so neglect any shift
@@ -1347,7 +1355,7 @@ class FilamentMap:
             psf_model.fwhm.max = fwhmval * 2.0 #do not allow the fwhm to encroach into next larger single scale interval
             psf_model.fixed
 
-            #step 9: Apply PSF to create model
+            #step 7: Apply PSF to create model
             net_scaling_factor = 3.2728865403756338
             y_coords, x_coords = np.where(coords_data > 0)
             init_params = QTable()
@@ -1443,6 +1451,16 @@ class FilamentMap:
                             nan_mask = np.isnan(Molecular_Mass)
                             n_nans = np.count_nonzero(nan_mask)
                             
+                            # debugging step
+
+                            fits.writeto("Molecular_Mass.fits", Molecular_Mass, overwrite=True)
+                            fits.writeto("alphaCO.fits", alphaCO, overwrite=True)
+                            fits.writeto("I_CO_2_1_16pc.fits", I_CO__2_1_16pc, overwrite=True)
+                            fits.writeto("nan_mask.fits", nan_mask.astype(np.uint8), overwrite=True)  
+                            # (save mask as 0/1 integers so it’s more readable)
+
+                            print("Saved Molecular_Mass, alphaCO, I_CO_2_1_16pc, and nan_mask as FITS files.")
+
 
                             print('Molecular Mass computed')
                             if n_nans == 0:
@@ -1494,9 +1512,8 @@ class FilamentMap:
             
             for fil_id, pix_info in segment_info_reprojected.items():
                 mass_sum = []
-                fil_length = len(pix_info[0])
+                fil_length = len(pix_info[1])
                 img = np.zeros_like(Molecular_Mass)
-                centers_mask = np.zeros_like(Molecular_Mass)
 
                 x_coords = []
                 y_coords = []
@@ -1506,7 +1523,6 @@ class FilamentMap:
                     y = values[1]
                     mass_sum.append(Molecular_Mass[y, x])
                     img[y, x] = Molecular_Mass[y, x]
-                    centers_mask[y, x] = 1
                     x_coords.append(x)
                     y_coords.append(y)
 
@@ -1515,7 +1531,7 @@ class FilamentMap:
                 Mass.append(np.sum(mass_sum))
                 orientation, curvature, theta = rht_curvature_from_coords(zip(x_coords, y_coords), shape = np.shape(Molecular_Mass), radius= int(round(self.Scalepix)), ntheta=180, background_percentile=25)
                 curvatures.append(curvature)
-                regions.append(pix_info[1])
+                regions.append(pix_info[2])
 
             # Store in dictionary with scale-specific column names
             assert(len(regions) == len(Lengths))
@@ -1531,11 +1547,18 @@ class FilamentMap:
             df = pd.DataFrame(csv_data)
 
             # Save to CSV
-            out_path = Path(f"{self.BaseDir}/{self.Label}/SyntheticMap/{self.FitsFile}_DensityData.csv")
-            df.to_csv(out_path, index=False)
-            out_path = Path(f"{self.BaseDir}/{self.Label}/{self.FitsFile}_MolecularMassMap.fits")
+            # CSV
+            csv_path = Path(self.BaseDir) / self.Label / "SyntheticMap" / f"{self.FitsFile}_DensityData.csv"
+            csv_path.parent.mkdir(parents=True, exist_ok=True)  # make sure dir exists
+            if csv_path.exists():
+                csv_path.unlink()  # delete existing file first
+            df.to_csv(csv_path, index=False)
+
+            # FITS
+            fits_path = Path(self.BaseDir) / self.Label / f"{self.FitsFile}_MolecularMassMap.fits"
+            fits_path.parent.mkdir(parents=True, exist_ok=True)
             hdu = fits.PrimaryHDU(Molecular_Mass, header=self.OrigHeader)
-            hdu.writeto(out_path, overwrite=True)
+            hdu.writeto(fits_path, overwrite=True)
 
         except Exception as e:
             print(f"Error occurred for {self.FitsFile}:", str(e))  
