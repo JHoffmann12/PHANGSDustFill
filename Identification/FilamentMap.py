@@ -1297,7 +1297,7 @@ class FilamentMap:
 
             data_new = self.getRegionData(use_Regions)
             img = np.zeros_like(self.BlockData, dtype=float) # make sure it's numeric for reproject_interp
-            label_val = 1
+            label_val = 2
 
             print('creating dictionary')
             segment_map = detect_sources(fil_centers, threshold=.5, npixels=10)
