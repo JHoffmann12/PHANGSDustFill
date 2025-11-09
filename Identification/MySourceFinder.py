@@ -1,37 +1,43 @@
-import numpy as np
-import os
-from astropy.io import fits
-import matplotlib.pyplot as plt
-from astropy.stats import sigma_clipped_stats
-from photutils.detection import DAOStarFinder
-from astropy.visualization import SqrtStretch
-from astropy.visualization.mpl_normalize import ImageNormalize
-from photutils.aperture import CircularAperture
+# Standard library
 import glob
-from astropy.wcs import WCS
-from astropy.table import Table
-import astropy
-import Modified_Constrained_Diffusion
 import importlib
-from astropy.coordinates import SkyCoord
-from astropy import units as u
-from astropy.table import Table, vstack
+import os
+import warnings
+
+# Third-party libraries
+import matplotlib.pyplot as plt
+import numpy as np
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
-from astropy.io import fits, ascii
-from astropy import wcs
+
+# Astropy
+import astropy
+from astropy import units as u, wcs
+from astropy.coordinates import SkyCoord
+from astropy.io import ascii, fits
+from astropy.stats import SigmaClip, sigma_clipped_stats
+from astropy.table import QTable, Table, vstack
+from astropy.visualization import SqrtStretch
+from astropy.visualization.mpl_normalize import ImageNormalize
 from astropy.wcs import WCS
 from astropy.wcs.utils import pixel_to_skycoord, skycoord_to_pixel
-from astropy.table import QTable
-from astropy.coordinates import SkyCoord
-import astropy.units as u
-from photutils.aperture import SkyCircularAperture, SkyCircularAnnulus, CircularAnnulus, CircularAperture
-from photutils.aperture import ApertureStats
-from photutils.aperture import aperture_photometry
+
+# Photutils
+from photutils.aperture import (
+    ApertureStats,
+    CircularAnnulus,
+    CircularAperture,
+    SkyCircularAnnulus,
+    SkyCircularAperture,
+    aperture_photometry,
+)
+from photutils.background import Background2D, MedianBackground, SExtractorBackground
+from photutils.detection import DAOStarFinder
 from photutils.utils import calc_total_error
-from astropy.stats import SigmaClip
-from photutils.background import SExtractorBackground, Background2D, MedianBackground
-import warnings
+
+# Local modules
+import Modified_Constrained_Diffusion
+
 
 from scipy.constants import c as speed_of_light
 ###from acstools import acszpt
@@ -844,6 +850,19 @@ def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixs
     
 
 def CloudCleanCheck(image_path, mask_save_path, orig_image_path, label_folder_path, thresh = 10):
+    
+    '''
+    This function parses through each pixel that was associated with a source and altered. It checks that the infill is reasonable. 
+    If not, the pixel is replaced with the median of its neighbors not associated with the same source. 
+
+    Parameters:
+    image_path (str): Path to the image with sources removed.
+    mask_save_path (str): Path to the mask file indicating source locations.
+    orig_image_path (str): Path to the original image before source removal.
+    label_folder_path (str): Directory where the output image will be saved.
+    thresh (float): Threshold value to determine if infill is unreasonable.
+    '''
+
     source_removed_image, _ = openFits(image_path)
     source_removed_image = source_removed_image[1] #Julia output multidimensional 
     masked_sources, _ = openFits(mask_save_path)

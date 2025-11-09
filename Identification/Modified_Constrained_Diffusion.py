@@ -1,50 +1,54 @@
 #Decomposes image into specified scales
 
 #imports
-from pathlib import Path
-import constrained_diffusion_decomposition_specificscales as cddss
-import matplotlib.pyplot as plt
-import numpy as np
+import copy
+import math
+from math import log
 import os
+from os import path
+from pathlib import Path
 import re
 import sys
+
+# Third-party libraries
+import constrained_diffusion_decomposition_specificscales as cddss
+import imageio
+import matplotlib
+from matplotlib import cm
+import matplotlib.pyplot as plt
+import numpy as np
+from pylab import *
+from scipy import ndimage
+from scipy.ndimage import gaussian_filter
+from skimage import color, data, exposure
+from skimage.filters import frangi, hessian, meijering, rank, sato
+from skimage.morphology import ball, binary_dilation, disk
+from skimage.restoration import inpaint
+from skimage.util import img_as_ubyte
+from skimage.util.dtype import dtype_range
+
+# Astropy
 from astropy.convolution import convolve, Gaussian2DKernel
 from astropy.io import fits
 from astropy.table import Table
 from astropy.visualization import make_lupton_rgb
-from math import log
-import math
-from matplotlib import cm
-from pylab import *
-from scipy import ndimage
-from scipy.ndimage import gaussian_filter
-from skimage import color
-from skimage import data
-from skimage.filters import frangi, hessian, meijering, sato
-import imageio
-import numpy as np
-import matplotlib.pyplot as plt
-from astropy.io import fits
-from astropy.table import Table
-from skimage.morphology import disk, binary_dilation
-from skimage.restoration import inpaint
-from skimage import color
-from os import path
-from skimage import data
-from skimage.filters import meijering, sato, frangi, hessian
-import matplotlib
-from skimage.util.dtype import dtype_range
-from skimage.util import img_as_ubyte
-from skimage import exposure
-from skimage.morphology import disk
-from skimage.morphology import ball
-from skimage.filters import rank
-import copy 
 
 plt.rcParams['figure.figsize'] = [15, 15]
 
 
 def openFits(path):
+    '''
+    Return the fits file and header located at the specified path.
+
+    Parameters:
+    - path (str): path to fits file
+
+    Returns:
+    - image_in (2D array): data from fits file
+    - header_in (Header object): header from fits file
+    - min_dim_img (int): minimum dimension of the image
+    '''
+
     with fits.open(path) as hdu:
         try:
             image_in = hdu[0].data
@@ -150,8 +154,6 @@ def decompose(image_path, label_folder_path, base_dir, label, distance_mpc, res,
 
             header_in = clean_header(header_in) 
 
-        # image_in =  extinctionEqualization(imagepath, image_in) #equalize if an extinction image
-
         pix_pc=4.848*pixscale*distance_mpc # convert to parcecs per pixel
     
         #generate scales to decompose image into
@@ -226,6 +228,7 @@ def decompose(image_path, label_folder_path, base_dir, label, distance_mpc, res,
 
 def clean_header(header):
     """Remove invalid or problematic FITS header cards (e.g. CONTINUE)."""
+    
     cleaned = fits.Header()
     for card in header.cards:
         try:

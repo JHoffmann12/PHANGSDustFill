@@ -1,4 +1,3 @@
-#Functions not associated with a filament map object but used within the main block of FilPHANGS
 from pathlib import Path
 import FilamentMap
 import matplotlib
@@ -10,7 +9,7 @@ import re
 from astropy.coordinates import EarthLocation
 from astropy.io import fits
 from astropy.table import Table
-import astropy.units as u  # Add this line to import the units
+import astropy.units as u  
 
 matplotlib.use('Agg')
 

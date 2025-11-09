@@ -19,10 +19,6 @@ matplotlib.use('Agg')
 
 if __name__ == "__main__":
 
-    #Params to Set
-#   _____________________________________________________________________________________________
-#   ____________________________________________________________________________________________
-
     #paths
     base_dir = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data")
     csv_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data\ImageData.xlsx")
@@ -40,6 +36,7 @@ if __name__ == "__main__":
     #SOAX params
     min_snake_length_ss = 25
     min_fg_int = 1638
+
     #Non SOAX params
     probability_threshold = .3
     min_length = 10
@@ -51,9 +48,9 @@ if __name__ == "__main__":
 
     start = time.time() #get start time
 
-    # mainFuncs.clearAllFiles(base_dir, csv_path, param_file_path) #clear all files...fix to not delete orig images!
+    # mainFuncs.clearAllFiles(base_dir, csv_path, param_file_path) #clear all files
     mainFuncs.renameFitsFiles(base_dir, csv_path) #apply naming convention to original files
-    mainFuncs.createDirectoryStructure(base_dir, csv_path)  #Create Directory and sub folders
+    mainFuncs.createDirectoryStructure(base_dir, csv_path)  #Create Directory and sub folders. Will not create if already present.
 
     for label in os.listdir(base_dir):  #Loop through Each Galaxy
 
@@ -80,7 +77,6 @@ if __name__ == "__main__":
             Modified_Constrained_Diffusion.decompose(image_path, label_folder_path, base_dir, label, distance_Mpc, res, pixscale, min_power, max_power, Rem_sources) #decompose into scales
 
             FilamentMapList = mainFuncs.setUpGalaxy(base_dir, label_folder_path, label, distance_Mpc, res, pixscale, param_file_path, noise_min, flatten_perc, min_intensity) #Initialize Filament Map objects
-            # mainFuncs.CreateSNRPlot(FilamentMapList, base_dir, percentile = 99, write = True)
 
             for filMap in FilamentMapList: #iterate through each Filament Map object 
 
@@ -91,11 +87,12 @@ if __name__ == "__main__":
                 filMap.getSyntheticFilamentMap(alphaCO_tag = 'SL24', use_dynamic_alphaCO = dynamic_alphaCO_path, use_Regions = region_dir_path, extract_Properties = True, write_fits = True) # Creates a synthetic map of all filaments at a single scale from the blurred probability_map. set_as_composite = True. 
 
                 #Extra Processing
-                filMap.blurComposite(set_blur_as_prob = True, write_fits = True) #Blur the composite
+                # filMap.blurComposite(set_blur_as_prob = True, write_fits = True) #Blur the composite
                 # skelData = filMap.applyProbabilityThresholdAndSkeletonize(probability_threshold = probability_threshold, min_area_pix = min_area_pix, write_fits = True)
                 # filMap.removeJunctions(skelData, probability_threshold, min_area_pix, set_as_composite = True, write_fits = True)
 
                 #Extra plots
+                # mainFuncs.CreateSNRPlot(FilamentMapList, base_dir, percentile = 99, write = True)
                 # filMap.getProbIntensityPlot(use_orig_img = False, write_fig = True) #Compares probability vs intensity
                 # filMap.getNoiseLevelsHistogram(noise_min = noise_min, write_fig = True)  # Histogram of calculated noise
                 # filMap.getFilamentLengthHistogram(probability_threshold = probability_threshold, write_fig = True) # Histogram of filament length in pixels

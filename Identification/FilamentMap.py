@@ -1,70 +1,57 @@
 #Filament map class to produce skeletonized filament maps of astrophysical images
 
 #imports 
+# imports
+import astropy.units as u
+from astropy.io import fits
 from astropy.nddata.utils import Cutout2D
+from astropy.stats import SigmaClip, sigma_clipped_stats
+from astropy.table import Table, QTable
+from astropy.wcs import WCS
+
 from pathlib import Path
-import AnalysisFuncs as AF
-import copy
-import csv
-import cv2
-import importlib
-import math
-import matplotlib
-import matplotlib.pyplot as plt
-import numpy as np
 import os
-import pandas as pd
-import random
-import re
-import subprocess
+from os import path
+from glob import glob
 import sys
+import re
+import csv
+import math
+import random
+import copy
+import subprocess
 import threading
 import time
 import timeit
-from astropy.io import fits
-from astropy.stats import SigmaClip
-from astropy.wcs import WCS
-from glob import glob
-from matplotlib.colors import Normalize
-from photutils.background import Background2D, MedianBackground
-from reproject import reproject_exact, reproject_adaptive, reproject_interp
-from scipy.ndimage import gaussian_filter, zoom
-from scipy.stats import kde, lognorm
-from skimage import measure
-from skimage.morphology import skeletonize
-import imageio
-from astropy.table import Table
-from skimage.morphology import disk, binary_dilation
-from skimage.restoration import inpaint
-from skimage import color
-from os import path
-from skimage import data
-from skimage.filters import meijering, sato, frangi, hessian
+import importlib
+
+import numpy as np
+import pandas as pd
 import matplotlib
-from skimage.util.dtype import dtype_range
+import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
+
+import cv2
+import imageio
+
+from scipy.ndimage import gaussian_filter, zoom, uniform_filter, convolve
+from scipy.stats import kde, lognorm, scoreatpercentile
+
+from skimage import measure, color, data, exposure
+from skimage.morphology import skeletonize, disk, ball, binary_dilation
+from skimage.filters import meijering, sato, frangi, hessian, rank
 from skimage.util import img_as_ubyte
-from skimage import exposure
-from skimage.morphology import disk
-from skimage.morphology import ball
-from skimage.filters import rank
-from scipy.ndimage import uniform_filter, convolve
-from astropy.stats import sigma_clipped_stats
-from photutils.psf import CircularGaussianPRF, make_psf_model_image
-from photutils.psf import PSFPhotometry
-from photutils.psf import SourceGrouper
-from photutils.background import LocalBackground, MMMBackground
-from photutils.background import Background2D, MedianBackground
-from photutils.psf import CircularGaussianPRF, make_psf_model_image
-from photutils.psf import PSFPhotometry
-from photutils.psf import SourceGrouper
-from photutils.background import LocalBackground, MMMBackground
-from photutils.background import Background2D, MedianBackground
-from astropy.stats import sigma_clipped_stats
-from astropy.table import QTable
-from photutils.segmentation import detect_sources
-from photutils.segmentation import deblend_sources
-from scipy.stats import scoreatpercentile
-import astropy.units as u
+from skimage.util.dtype import dtype_range
+from skimage.restoration import inpaint
+
+from reproject import reproject_exact, reproject_adaptive, reproject_interp
+
+from photutils.background import Background2D, MedianBackground, LocalBackground, MMMBackground
+from photutils.psf import CircularGaussianPRF, make_psf_model_image, PSFPhotometry, SourceGrouper
+from photutils.segmentation import detect_sources, deblend_sources
+
+import AnalysisFuncs as AF
+
 
 matplotlib.use('Agg')
 
@@ -99,11 +86,8 @@ class FilamentMap:
 
         with fits.open(fits_path, ignore_missing=True) as hdul:
             OrigData = np.array(hdul[0].data)  # Assuming the image data is in the primary HDU
-            print(f'origData type 0: {type(OrigData)}')
 
-            # OrigData = self.extinctionEqualization(fits_file, OrigData, scalepix, hdul[0].header)
             OrigData = self.preprocessImage(OrigData, fits_file, flatten_percent = flatten_perc)
-            print(f'origData type 1: {type(OrigData)}')
 
             OrigData = np.nan_to_num(OrigData, nan=0.0)  # Replace NaNs with 0
             OrigHeader = hdul[0].header
@@ -119,19 +103,18 @@ class FilamentMap:
         with fits.open(input_path,ignore_missing=True) as hdu:
             hdu.info()
         try:
-            img=hdu[0].data #add error handling for img = hdu[1].data
+            img=hdu[0].data
             OrigData[img < min_intensity] = 0
 
         except:
             OrigData = OrigData
-            print('applying min_intensity')
             OrigData[OrigData < min_intensity] = 0
     
         self.ProbabilityMap = np.zeros_like(OrigData)
         self.BkgSubDivRMSMap = np.zeros_like(OrigData)
         self.OrigHeader = OrigHeader
         self.OrigData = OrigData
-        self.BlockHeader = OrigHeader.copy() #updated later
+        self.BlockHeader = OrigHeader.copy() #updated later to relfect blocking
         self.Composite = np.zeros_like(OrigData)
         self.Scalepix = scalepix
         fits_file = os.path.splitext(fits_file)[0]  # removes the .fits extension
@@ -179,8 +162,7 @@ class FilamentMap:
             image=image.astype('uint16')
 
             # Equalization
-            radius = int(Scale * 2 + 1) #Make box 2% of smaller image dimension...appears to work well
-            #make the radius 2 * extracted_scale
+            radius = int(Scale * 2 + 1) #Make the radius 2 * extracted_scale
             footprint = disk(radius)  # disk of radius for local hist.eq
             processed_img = rank.equalize(image, footprint, mask=maskfoot)
             outhdu = fits.PrimaryHDU(data=processed_img)
@@ -207,6 +189,7 @@ class FilamentMap:
         
         return processed_img
             
+
     def setBlockFactor(self, bf):
         self.BlockFactor = bf
     
@@ -214,7 +197,7 @@ class FilamentMap:
     def _getScale(self, fits_file):
         
         """
-        get the scale associated with an image 
+        get the scale associated with an image. Scales may need to be added. 
 
         """
 
@@ -224,7 +207,7 @@ class FilamentMap:
             if scale in fits_file:
                 return scale
 
-        print("Invalid FITS file: Scale not recognized")
+        print("Invalid FITS file: Scale not recognized. Please add scale to _getScale method.")
         return None
 
 
@@ -268,9 +251,6 @@ class FilamentMap:
 
         # Determine the rank (index) of the current power of two in the sorted list
         rank = sorted_powers.index(current_power)
-        # if(current_power <=1):
-        #     return 0
-        # else: 
         block_factor = 2 ** rank
         if(block_factor <= 1):
             block_factor = 0
@@ -280,6 +260,7 @@ class FilamentMap:
     def _getBlankRegionMask(self):
         """
         Generate a mask to hide large vacant regions as well as the image border.
+        
         Returns: 
         - a mask, where true indicates a region to be masked.
         """
@@ -348,7 +329,7 @@ class FilamentMap:
             box_size = round(10.*self.Scalepix/(2.*blockFactor))*2+1
             if(box_size < .02* np.min((np.shape(data)[0], np.shape(data)[1]))):
                 print("Correcting box size")
-                box_size = int(.02*np.min((np.shape(data)[0], np.shape(data)[1]))) * 2 + 1 #Make box 2% of smaller image dimension...appears to work well
+                box_size = int(.02*np.min((np.shape(data)[0], np.shape(data)[1]))) * 2 + 1 #Make box 2% of smaller image dimension.Appears to work well
 
             bkg = Background2D(data, box_size=box_size, coverage_mask = mask, exclude_percentile = 10, filter_size=(3,3), bkg_estimator=bkg_estimator) #Very different RMS with mask. Minimum noise is MUCH larger. 
 
@@ -419,12 +400,11 @@ class FilamentMap:
                 self.BlockHeader['CDELT1'] = (self.OrigHeader['CDELT1']) * self.BlockFactor
                 self.BlockHeader['CDELT2'] = (self.OrigHeader['CDELT2']) * self.BlockFactor
             except KeyError:
-                    # Extract the CD values
+                # Extract the CD values
                 CD1_1 = self.BlockHeader['CD1_1']
                 CD1_2 = self.BlockHeader['CD1_2']
                 CD2_1 = self.BlockHeader['CD2_1']
                 CD2_2 = self.BlockHeader['CD2_2']
-                
                 
                 # Add the CDELT values to the header
                 self.BlockHeader['CDELT1'] = CD1_1 * self.BlockFactor
@@ -439,9 +419,6 @@ class FilamentMap:
             reprojected_data = self.reprojectWrapper(self.OrigData, self.OrigHeader, self.BlockHeader, self.BlockData)
             self.BlankRegionMask = self.reprojectWrapper(self.BlankRegionMask, self.OrigHeader,self.BlockHeader, self.BlockData)
 
-            # Crop NaN border 
-            self.BlockData = self._cropNanBorder(reprojected_data, (np.shape(self.BlockData)))
-            self.BlankRegionMask = self._cropNanBorder(self.BlankRegionMask, (np.shape(self.BlockData)))
             assert(np.shape(self.BlankRegionMask)==np.shape(self.BlockData))
             self.BlankRegionMask = self.BlankRegionMask == 1 #boolean mask, True indicates pixels to mask
         else:
@@ -515,12 +492,10 @@ class FilamentMap:
         stretch_start = 1.75
         stretch_stop = 2.5
 
-
         #adjust soax length param to account for blocking
         new_length = round(min_snake_length_ss - ((math.sqrt(self.BlockFactor))*4))
         self.updateMinimumSnakeLength(new_length, min_fg_int)
-        print('Starting Threads')
-
+        print('Starting Soax Threads')
 
         #begin 5 threads to speed up soax
         threads = []
@@ -570,15 +545,13 @@ class FilamentMap:
             print('Error: Assertions failed, a faulty path exists!')
             
         print("starting Soax")
-        cmdString = f'"{batch}" soax -i "{input_image}" -p "{self.ParamFile}" -s "{output_dir}" --ridge {ridge_start} 0.0075 {ridge_stop} --stretch {stretch_start} 0.5 {stretch_stop}' #can update ridge and stretch later
-        print(cmdString)
+        cmdString = f'"{batch}" soax -i "{input_image}" -p "{self.ParamFile}" -s "{output_dir}" --ridge {ridge_start} 0.0075 {ridge_stop} --stretch {stretch_start} 0.5 {stretch_stop}' 
         with open(os.devnull, 'w') as devnull:
             subprocess.run(cmdString, shell=True, stdout=devnull, stderr=devnull) #supress output from threads because its garbage
 
         self._convertSoaxToFits(output_dir, ridge_start) #ridge_start can be used to specify the two SOAX files created by one process
 
         print("Soax converted to Fits, Success!")
-
 
 
     def updateMinimumSnakeLength(self, new_length, min_fg_int):
@@ -616,7 +589,7 @@ class FilamentMap:
     def _convertSoaxToFits(self, output_dir, ridge_start): 
 
         """
-        After the soax .txt file is produced, convert them to a .Fits file. This function manages a loop, calling the txtToFilaments function to do the heavy lifting. 
+        After the soax .txt file is produced, convert them to a .Fits file. This function manages a loop, calling the _txtToFilaments function to do the heavy lifting. 
 
         Parameters:
         - output_dir (str): Directory to output the .Fits files to
@@ -829,7 +802,6 @@ class FilamentMap:
             self.IntensityMap[self.Composite !=0] = 255*self.OrigData[self.Composite!=0]
         else: 
             temp = self.reprojectWrapper(self.ProbabilityMap, self.OrigHeader, self.BlockHeader, self.BlockData)
-            temp = self._cropNanBorder(temp, (np.shape(self.BlockData)))
             self.IntensityMap[temp !=0] = self.BkgSubDivRMSMap[temp!=0]
 
 
@@ -849,7 +821,6 @@ class FilamentMap:
         else: 
             self.setIntensityMap(orig = False)
             temp = self.reprojectWrapper(self.ProbabilityMap, self.OrigHeader, self.BlockHeader, self.BlockData)
-            temp = self._cropNanBorder(temp, (np.shape(self.BlockData)))
             probability_flat = temp.flatten()
 
         # Flatten the images
@@ -1149,23 +1120,36 @@ class FilamentMap:
 
 
 
-    def reprojectWrapper(self, OrigData, OrigHeader, BlockHeader, BlockData):
-        start = time.time()
-        # reprojected_data, _ = reproject_exact((OrigData, OrigHeader), BlockHeader, shape_out=(np.shape(BlockData)))
-        # reprojected_data, _ = reproject_adaptive((OrigData, OrigHeader), BlockHeader, shape_out=(np.shape(BlockData)), conserve_flux = True)
-        reprojected_data, _ = reproject_interp((OrigData, OrigHeader), BlockHeader, shape_out=(np.shape(BlockData)))
+    def reprojectWrapper(self, OrigData, OrigHeader, OutputHeader, OutputData):
+        """
+        Reproject data from one fits file to another. Take OrigData and OrigHeader and reproject into the frame of OutputHeader and OutputData.
 
-        end = time.time()
-        elapsed_time = end - start
-        hours = int(elapsed_time // 3600)
-        minutes = int((elapsed_time % 3600) // 60)
-        seconds = int(elapsed_time % 60)
-        print(f"Reprojection complete in {hours:02d}:{minutes:02d}:{seconds:02d} in total!")
+        Parameters:
+        - OrigData: Data to reproject
+        - OrigHeader: Header of data to reproject
+        - OutputHeader: Header of data to reproject into
+        - OutputData: Data to reproject into, used only for shape
+        """
+
+        reprojected_data, _ = reproject_interp((OrigData, OrigHeader), OutputHeader, shape_out=(np.shape(OutputData)))
+        reprojected_data = self._cropNanBorder(data, np.shape(OutputData))
+
         return reprojected_data
     
 
 
     def getRegionData(self, use_Regions):
+
+        """
+        Find the appropriate region file and reproject into the size of the original image. 
+
+        Parameters:
+        - use_Regions (str): directory where all region files live
+
+        Returns:
+        - data_new (float): region file reprojected into original image shape
+        """
+
         # Look through files in region directory
         dir = use_Regions
         for file in os.listdir(dir):
@@ -1178,24 +1162,30 @@ class FilamentMap:
                     data = np.array(hdul[0].data)  # region map
                     header = hdul[0].header
 
-                # Reproject into same frame
-                # data_new, _ = reproject_interp(
-                #     (data, header), self.BlockHeader, shape_out=np.shape(self.BlockData)
-                # )
-                data_new, _ = reproject_interp(
-                    (data, header), self.OrigHeader, shape_out=np.shape(self.OrigData)
-                )
-                data_new = self._cropNanBorder(data_new, np.shape(self.OrigData))
+                data_new = self.reprojectWrapper(data, header, self.OrigHeader, self.OrigData)
                 return data_new #return region file reprojected into original file shape
+            
         print(f'could not find file in {dir}')
         return np.zeros(self.OrigData.shape)
 
 
-#Fix mask projection to fit blocked data!!
     def getRegion(self, mask, data_new):
+        
+        """
+        Find the region a prticular file belongs to. This is determined by the majority region value within the mask. 
+
+        Parameters:
+        - mask (int): Image with all zeros except for the filament pixels, which are 1
+        - data_new (float): region file reprojected into original image shape
+
+        Returns:
+        - region (int): region where the filament belongs to 
+        """
+                 
         #data_new is the region mask simple file
         if np.sum(data_new) == 0:
             return -1
+        
         # Region values inside mask
         region_values = data_new[mask > 0]
 
@@ -1217,12 +1207,25 @@ class FilamentMap:
     def getSyntheticFilamentMap(self, alphaCO_tag, use_dynamic_alphaCO = None, use_Regions = None, extract_Properties = True, write_fits = True):
 
         """
-        Create a map of estimated filaments
+        Use PSF fitting to create a synthetic image of only detected filaments. Then use this synthetic map to extract filament properties such as length, curvature, mass, line mass, surface density. 
+        The Process is as follows: 
+
+        1. Load the original CDD image and the composite image
+        2. Apply blocking to speed up PSF fitting   
+        3. Process the composite image to remove junctions
+        4. Create a filament dictionary from the processed composite image using photutils segmentation to identify individual filaments
+        5. Create a labeled mask for all filaments
+        6. Reproject the labeled mask back to the original image size
+        7. For each filament, fit PSFs along the filament to create a synthetic image of only filaments
+        8. If extract_Properties is True, extract filament properties using the synthetic image and the original CDD image
 
         Parameters:
+        - alphaCO_tag (str): Tag to identify which alphaCO value to use from the config file
+        - use_dynamic_alphaCO (str): String to dynamic alphaCO map directory
+        - use_Regions (str): directory where all region files live
+        - extract_Properties (bool): Whether or not to extract filament properties
         - write_fits (bool): Save the map as a fits file
         """
-
 
         #Step 1: Load CDD Image
         fits_path = os.path.join(self.BaseDir, self.Label)
@@ -1260,10 +1263,14 @@ class FilamentMap:
             self.BlockHeader['CRPIX1'] = (header['CRPIX1']) / self.BlockFactor 
             self.BlockHeader['CRPIX2'] = (header['CRPIX2']) / self.BlockFactor 
 
-            data, _ = reproject_interp((data, header), self.BlockHeader, shape_out=(np.shape(BlockData)))
-            coords_data, _ = reproject_interp((coords_data, header), self.BlockHeader, shape_out=(np.shape(BlockData)))
-            data = self._cropNanBorder(data, np.shape(BlockData))
-            coords_data = self._cropNanBorder(coords_data, np.shape(BlockData))
+            # data, _ = reproject_interp((data, header), self.BlockHeader, shape_out=(np.shape(BlockData)))
+            # data = self._cropNanBorder(data, np.shape(BlockData))
+            data = self.reprojectWrapper(data, header, self.BlockHeader, BlockData) #use original data to avoid blurring from reproject_interp
+
+            # coords_data, _ = reproject_interp((coords_data, header), self.BlockHeader, shape_out=(np.shape(BlockData)))
+            # coords_data = self._cropNanBorder(coords_data, np.shape(BlockData))
+            coords_data = self.reprojectWrapper(data, header, self.BlockHeader, BlockData) #use original data to avoid blurring from reproject_interp
+
         else:
             print(f'scale: {self.Scale}')
         
@@ -1274,9 +1281,7 @@ class FilamentMap:
         dilated_image = skeletonize(dilated_image)
         coords_data= dilated_image.astype(np.uint8)
 
-#____________________________________________________________________________________
-        #Step 1: Remove junctions
-        print('junctions removed')
+        #Step 6: Remove junctions
         fil_centers = copy.deepcopy(coords_data)
         junctions = AF.getSkeletonIntersection(np.array(fil_centers*255))
         IntersectsRemoved = AF.removeJunctions(junctions, fil_centers, dot_size = 3) #check intersects removed
@@ -1287,9 +1292,8 @@ class FilamentMap:
         try: 
 
             fil_centers = IntersectsRemoved
-#____________________________________________________________________________________
 
-            #Step 2: Create a filament dictionary 
+        #Step 7: Create a filament dictionary 
 
             data_new = self.getRegionData(use_Regions)
             img = np.zeros_like(self.BlockData, dtype=float) # make sure it's numeric for reproject_interp
@@ -1307,8 +1311,9 @@ class FilamentMap:
                 label_val+=10
 
             # Reproject with interpolation (can blur labels slightly)
-            imgNew, _ = reproject_exact((img, self.BlockHeader), self.OrigHeader, shape_out=self.OrigData.shape)
-            imgNew = self._cropNanBorder(imgNew, self.OrigData.shape)
+            # imgNew, _ = reproject_exact((img, self.BlockHeader), self.OrigHeader, shape_out=self.OrigData.shape)
+            # imgNew = self._cropNanBorder(imgNew, self.OrigData.shape)
+            imgNew = self. reprojectWrapper(img, self.BlockHeader, self.OrigHeader, self.OrigData) 
 
             # Create a labeled mask for all filaments
             segment_info_reprojected = {}
@@ -1325,17 +1330,14 @@ class FilamentMap:
                 segment_info_reprojected[lab] = (coords_list, region)
             print('Dictionary reprojected.')
 
-
             # Debugging
             hdu = fits.PrimaryHDU(imgNew, header=self.OrigHeader)
             hdu.writeto('imgNew_reprojected.fits', overwrite=True)
             print("Saved reprojected filament map to imgNew_reprojected.fits")
 
 
-        #__________________________________________________________________________________
 
-
-            #step 6: Define PSF 
+            #step 8: Define PSF 
             print('PSF time')
             psf_model = CircularGaussianPRF(flux=1, fwhm=fwhmval) #No longer divide fwhmval/2.35
             psf_model.x_0.fixed = True #allowing this to vary when x_coords, y_coords given no intentional offset shows most would only move by ~0.125 pix, so neglect any shift
@@ -1345,7 +1347,7 @@ class FilamentMap:
             psf_model.fwhm.max = fwhmval * 2.0 #do not allow the fwhm to encroach into next larger single scale interval
             psf_model.fixed
 
-            #step 7: Apply PSF to create model
+            #step 9: Apply PSF to create model
             net_scaling_factor = 3.2728865403756338
             y_coords, x_coords = np.where(coords_data > 0)
             init_params = QTable()
@@ -1373,8 +1375,9 @@ class FilamentMap:
             model = globalfactor * model
 
             #Project back
-            model, _ = reproject_interp((model, self.BlockHeader), header, shape_out=(np.shape(self.OrigData)))
-            model = self._cropNanBorder(model, np.shape(self.OrigData))
+            # model, _ = reproject_interp((model, self.BlockHeader), header, shape_out=(np.shape(self.OrigData)))
+            # model = self._cropNanBorder(model, np.shape(self.OrigData))
+            model = self.reprojectWrapper(model, self.BlockHeader, header, self.OrigData)
 
             if(write_fits):
                 out_path = Path(f"{self.BaseDir}/{self.Label}/SyntheticMap/{self.FitsFile}_SyntheticMap.fits")
@@ -1382,14 +1385,14 @@ class FilamentMap:
                 hdu.writeto(out_path, overwrite=True)
 
             if extract_Properties: 
-                #step 3: Set partameters for Density Calculations
+            #step 10: Set partameters for Density Calculations
                 inclination = 9 * np.pi / 180  # Inclination in radians
                 sSFR = 1.74 #get specific SFR*
                 x_fit = phot['x_fit']
                 y_fit = phot['y_fit']
                 flux_fit = phot['flux_fit']
 
-                # Step 4:Create a 2D map to associate flux values with filament spine pixels
+            # Step 11: Create a 2D map to associate flux values with filament spine pixels
                 flux_map = np.zeros_like(self.BlockData, dtype=float) #use blocked data since PSF ran on blocked data
                 for x, y, f in zip(x_fit.astype(int), y_fit.astype(int), flux_fit):
                     flux_map[y, x] = f  
@@ -1397,10 +1400,11 @@ class FilamentMap:
                 I_F770W_16pc = flux_map*globalfactor
 
                 #reproject flux_map to normal size now
-                I_F770W_16pc, _ = reproject_interp((I_F770W_16pc, self.BlockHeader), self.OrigHeader, shape_out=(np.shape(self.OrigData)))
-                I_F770W_16pc = self._cropNanBorder(I_F770W_16pc, np.shape(self.OrigData))
+                # I_F770W_16pc, _ = reproject_interp((I_F770W_16pc, self.BlockHeader), self.OrigHeader, shape_out=(np.shape(self.OrigData)))
+                # I_F770W_16pc = self._cropNanBorder(I_F770W_16pc, np.shape(self.OrigData))
+                I_F770W_16pc = self.reprojectWrapper(I_F770W_16pc, self.BlockHeader, self.OrigHeader, self.OrigData)
 
-                # Step 5: Extract Density and mass
+            # Step 12: Extract Density and mass
                 print('extracting density')
                 I_F770W_16pc = I_F770W_16pc * np.cos(np.radians(inclination))
                 log_C_F770W = -0.21 * (np.log10(sSFR) + 10.14)  
@@ -1428,8 +1432,10 @@ class FilamentMap:
                                 header = hdul[0].header
 
                             # Reproject into same frame
-                            alphaCO, _ = reproject_interp((alphaCO, header), self.OrigHeader, shape_out=np.shape(self.OrigData))
-                            alphaCO = self._cropNanBorder(alphaCO, np.shape(self.OrigData))
+                            # alphaCO, _ = reproject_interp((alphaCO, header), self.OrigHeader, shape_out=np.shape(self.OrigData))
+                            # alphaCO = self._cropNanBorder(alphaCO, np.shape(self.OrigData))
+                            alphaCO = self.reprojectWrapper(alphaCO, header, self.OrigHeader, self.OrigData)
+
                             assert(np.shape(alphaCO) == np.shape(self.OrigData))
 
                             Molecular_Mass = alphaCO * I_CO__2_1_16pc  # Units of Solar mass per pix^2
@@ -1437,16 +1443,6 @@ class FilamentMap:
                             nan_mask = np.isnan(Molecular_Mass)
                             n_nans = np.count_nonzero(nan_mask)
                             
-                            # debugging step
-
-                            # fits.writeto("Molecular_Mass.fits", Molecular_Mass, overwrite=True)
-                            # fits.writeto("alphaCO.fits", alphaCO, overwrite=True)
-                            # fits.writeto("I_CO_2_1_16pc.fits", I_CO__2_1_16pc, overwrite=True)
-                            # fits.writeto("nan_mask.fits", nan_mask.astype(np.uint8), overwrite=True)  
-                            # (save mask as 0/1 integers so it’s more readable)
-
-                            # print("Saved Molecular_Mass, alphaCO, I_CO_2_1_16pc, and nan_mask as FITS files.")
-
 
                             print('Molecular Mass computed')
                             if n_nans == 0:
@@ -1486,7 +1482,7 @@ class FilamentMap:
                     Molecular_Mass = 5.5 * I_CO__2_1_16pc  # Default value
 
 
-            #step 6: Save Data
+            #step 13: Save Data
             print('converting to csv data')
             csv_data = {}
 
@@ -1546,6 +1542,8 @@ class FilamentMap:
 
 
 
+
+#Functions copied directy from FilFinder
 def rht_curvature_from_coords(coords, shape, radius=10, ntheta=180, background_percentile=25):
     """
     Run RHT curvature analysis on a set of pixel coordinates.

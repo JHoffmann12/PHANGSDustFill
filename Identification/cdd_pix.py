@@ -69,6 +69,15 @@ def get_fits_file_path(folder_path, galaxy_name):
     return None
 
 def decompose(label_folder_path, base_dir, label, numscales=3):
+    """
+    Decompose the image into specified scales and save the decompositions into CDD subfolder.
+
+    Parameters:
+    - label_folder_path (str): path to the folder associated with the specified label/celestial object
+    - base_dir (str): Base directory for all FilPHANGS files
+    - label (str): label of the desired celestial object
+    - numscales (int): number of scales to decompose the image into. Default is 3.
+    """
 
     if(not decompositionExists(label_folder_path)): #check if scale decomposed image exists
         source_rem_dir = os.path.join(label_folder_path, "Source_Removal\CDD_Pix")
