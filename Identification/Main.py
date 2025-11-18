@@ -48,6 +48,7 @@ if __name__ == "__main__":
 
     start = time.time() #get start time
 
+    todo = ['3351', '3627', '4254', '4303', '4321', '4535', '5068','7496']
     # mainFuncs.clearAllFiles(base_dir, csv_path, param_file_path) #clear all files
     mainFuncs.renameFitsFiles(base_dir, csv_path) #apply naming convention to original files
     mainFuncs.createDirectoryStructure(base_dir, csv_path)  #Create Directory and sub folders. Will not create if already present.
@@ -59,7 +60,8 @@ if __name__ == "__main__":
         if not os.path.isdir(label_folder_path):  # Skip if it's not a directory`       `
             continue
 
-        if(label != 'OriginalMiriImages' and label != "Figures" and  "ngc0628_F770W" in label): 
+        if(label != 'OriginalMiriImages' and label != "Figures" and 'IC5146' !=label
+           and 'masks_v5' not in label and  any(t in label for t in todo)): 
 
             distance_Mpc,res, pixscale, MJysr, Band, min_power, max_power, Rem_sources = mainFuncs.getInfo(label, csv_path) #get relevant information for image from csv file
 
@@ -84,8 +86,15 @@ if __name__ == "__main__":
                 filMap.scaleBkgSubDivRMSMap(write_fits = True)
                 filMap.runSoaxThreads(min_snake_length_ss, min_fg_int, batch_path) #Create 10 soax FITS files
                 filMap.createComposite(write_fits = True) #Combine all 10 Fits files
-                filMap.getSyntheticFilamentMap(alphaCO_tag = 'SL24', use_dynamic_alphaCO = dynamic_alphaCO_path, use_Regions = region_dir_path, extract_Properties = True, write_fits = True) # Creates a synthetic map of all filaments at a single scale from the blurred probability_map. set_as_composite = True. 
+                filMap.getSyntheticFilamentMap(min_scale = 2**min_power, alphaCO_tag = 'SL24', use_dynamic_alphaCO = dynamic_alphaCO_path, use_Regions = region_dir_path, extract_Properties = True, write_fits = True) # Creates a synthetic map of all filaments at a single scale from the blurred probability_map. set_as_composite = True. 
+                #Current status: reprojecting the skeletonized image is fucked, need to fix. 
 
+                # Delete the object to clear memory
+                # filMap_index = FilamentMapList.index(filMap)  
+                # del FilamentMapList[filMap_index]            
+                # del filMap                                  
+
+            
                 #Extra Processing
                 # filMap.blurComposite(set_blur_as_prob = True, write_fits = True) #Blur the composite
                 # skelData = filMap.applyProbabilityThresholdAndSkeletonize(probability_threshold = probability_threshold, min_area_pix = min_area_pix, write_fits = True)

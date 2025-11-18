@@ -122,6 +122,7 @@ def get_fits_file_path(folder_path, galaxy_name):
     
     return None
 
+
 def decompose(image_path, label_folder_path, base_dir, label, distance_mpc, res, pixscale, min_power, max_power, Source_Rem):
 
     """
@@ -144,15 +145,23 @@ def decompose(image_path, label_folder_path, base_dir, label, distance_mpc, res,
         fracsmooth=0.333 # to remove divots, CDD outputs will be smoothed with Gaussian kernel having sigma=fracsmooth*pcscale[or matching pixscale]
 
 
-        imagepath = image_path
 
+        imagepath = image_path
         # Open FITS file and handle various erros
         image_in, header_in, min_dim_img = openFits(imagepath)
+        assert(image_in.ndim == 2)
 
-        if Source_Rem: 
-            image_in = image_in[1] #account for cube output from julia cloudclean
-
-            header_in = clean_header(header_in) 
+        # if Source_Rem: 
+        #     try:
+        #         image_in = image_in[1] #account for cube output from julia cloudclean
+        #         assert(image_in.ndim == 2)
+        #     except:
+        #         image_in = image_in[0] #account for cube output from julia cloudclean
+        #     try:
+        #         assert(image_in.ndim == 2)
+        #     except:
+        #         image_in = image_in
+        #     header_in = clean_header(header_in) 
 
         pix_pc=4.848*pixscale*distance_mpc # convert to parcecs per pixel
     

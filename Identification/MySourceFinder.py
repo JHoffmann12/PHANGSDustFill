@@ -849,7 +849,7 @@ def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixs
         return mask_save_path
     
 
-def CloudCleanCheck(image_path, mask_save_path, orig_image_path, label_folder_path, thresh = 10):
+def CloudCleanCheck(image_path, mask_save_path, orig_image_path, label_folder_path, thresh = 7):
     
     '''
     This function parses through each pixel that was associated with a source and altered. It checks that the infill is reasonable. 

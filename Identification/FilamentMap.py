@@ -4,6 +4,7 @@
 from astropy.nddata.utils import Cutout2D
 from astropy.stats import SigmaClip, sigma_clipped_stats
 from astropy.table import Table, QTable
+from astropy import units as u
 from astropy.wcs import WCS
 from astropy.io import fits
 from pathlib import Path
@@ -21,13 +22,13 @@ import threading
 import time
 import timeit
 import importlib
+from scipy import ndimage
 
 import numpy as np
 import pandas as pd
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
-
 import cv2
 import imageio
 
@@ -48,6 +49,7 @@ from photutils.psf import CircularGaussianPRF, make_psf_model_image, PSFPhotomet
 from photutils.segmentation import detect_sources, deblend_sources
 
 import AnalysisFuncs as AF
+import sys
 
 
 matplotlib.use('Agg')
@@ -413,14 +415,11 @@ class FilamentMap:
             self.BlockHeader['CRPIX2'] = (self.OrigHeader['CRPIX2']) / self.BlockFactor 
 
 
-            reprojected_data = self.reprojectWrapper(self.OrigData, self.OrigHeader, self.BlockHeader, self.BlockData)
+            self.BlockData  = self.reprojectWrapper(self.OrigData, self.OrigHeader, self.BlockHeader, self.BlockData)
             self.BlankRegionMask = self.reprojectWrapper(self.BlankRegionMask, self.OrigHeader,self.BlockHeader, self.BlockData)
 
-            # Crop NaN border 
-            self.BlockData = self._cropNanBorder(reprojected_data, (np.shape(self.BlockData)))
-            self.BlankRegionMask = self._cropNanBorder(self.BlankRegionMask, (np.shape(self.BlockData)))
             assert(np.shape(self.BlankRegionMask)==np.shape(self.BlockData))
-            self.BlankRegionMask = self.BlankRegionMask == 1 #boolean mask, True indicates pixels to mask
+            self.BlankRegionMask = self.BlankRegionMask == 1 #convert back to boolean mask, True indicates pixels to mask
         else:
             self.BlockData = self.OrigData
 
@@ -443,8 +442,9 @@ class FilamentMap:
         """
 
         # Create a mask of non-NaN values
+        image = np.array(image, dtype=float)  # converts numbers; non-convertible become nan
         mask = ~np.isnan(image)
-        
+
         # Find the rows and columns with at least one non-NaN value
         non_nan_rows = np.where(mask.any(axis=1))[0]
         non_nan_cols = np.where(mask.any(axis=0))[0]
@@ -1007,7 +1007,7 @@ class FilamentMap:
 
         #remove junctions
         junctions = AF.getSkeletonIntersection(np.array(255*skelComposite))
-        IntersectsRemoved = AF.removeJunctions(junctions, skelComposite, dot_size = 3)
+        IntersectsRemoved = AF.removeJunctions(junctions, skelComposite, dot_size = 1)
 
         # #remove small filaments
         # labels, stats, num_labels = AF.identify_connected_components(np.array(IntersectsRemoved))
@@ -1122,7 +1122,7 @@ class FilamentMap:
 
 
 
-    def reprojectWrapper(self, OrigData, OrigHeader, OutputHeader, OutputData):
+    def reprojectWrapper(self, inData, inHeader, OutputHeader, OutputData):
         """
         Reproject data from one fits file to another. Take OrigData and OrigHeader and reproject into the frame of OutputHeader and OutputData.
 
@@ -1133,8 +1133,8 @@ class FilamentMap:
         - OutputData: Data to reproject into, used only for shape
         """
 
-        reprojected_data, _ = reproject_interp((OrigData, OrigHeader), OutputHeader, shape_out=(np.shape(OutputData)))
-        reprojected_data = self._cropNanBorder(data, np.shape(OutputData))
+        reprojected_data, _ = reproject_interp((inData, inHeader), OutputHeader, shape_out=(np.shape(OutputData)))
+        reprojected_data = self._cropNanBorder(reprojected_data, np.shape(OutputData))
 
         return reprojected_data
     
@@ -1199,25 +1199,25 @@ class FilamentMap:
         region_ids, counts = np.unique(region_values.astype(int), return_counts=True)
         dominant_region = region_ids[np.argmax(counts)]
 
-        print(f"success, dominant region is: {dominant_region}")
+        # print(f"success, dominant region is: {dominant_region}")
         return int(dominant_region)
 
 
 
 
 
-    def getSyntheticFilamentMap(self, alphaCO_tag, use_dynamic_alphaCO = None, use_Regions = None, extract_Properties = True, write_fits = True):
+    def getSyntheticFilamentMap(self, min_scale, alphaCO_tag, use_dynamic_alphaCO = None, use_Regions = None, extract_Properties = True, write_fits = True):
 
         """
         Use PSF fitting to create a synthetic image of only detected filaments. Then use this synthetic map to extract filament properties such as length, curvature, mass, line mass, surface density. 
         The Process is as follows: 
 
         1. Load the original CDD image and the composite image
-        2. Apply blocking to speed up PSF fitting   
-        3. Process the composite image to remove junctions
-        4. Create a filament dictionary from the processed composite image using photutils segmentation to identify individual filaments
+        2. Process the composite image to remove junctions
+        3. Apply blocking to speed up PSF fitting   
+        4. Create a filament dictionary from the blocked and processed composite image using photutils segmentation to identify individual filaments
         5. Create a labeled mask for all filaments
-        6. Reproject the labeled mask back to the original image size
+        6. Reproject the labeled mask back to the original image size such that it lines up with the reprojected output from PSF. Use skeletonized filament to determine length and every pixel to find total mass. 
         7. For each filament, fit PSFs along the filament to create a synthetic image of only filaments
         8. If extract_Properties is True, extract filament properties using the synthetic image and the original CDD image
 
@@ -1230,6 +1230,7 @@ class FilamentMap:
         """
 
         #Step 1: Load CDD Image
+        print('Begenning synthetic map production')
         fits_path = os.path.join(self.BaseDir, self.Label)
         fits_path = os.path.join(fits_path, "CDD")
         
@@ -1249,319 +1250,356 @@ class FilamentMap:
         # Step 2: Load Composite image
         coords_data = self.Composite
 
-        #step 3: Set fwhmval for PSF model
-        Scale = self._getScale( self.FitsFile)
-        Scale = Scale.replace("pc", '')
-        Scale = float(Scale)
-        # fwhmval = int(Scale/self.Scalepix)
-        fwhmval = int(16/self.Scalepix) #double counting effect of blocking with larger psf AND blocking??
 
-        #Step 4: Apply blocking to speed up PSF fitting
+
+        #Step 6: Apply blocking to speed up PSF fitting
         if self.BlockFactor != 0:
-            BlockData = np.zeros((int(data.shape[0] / self.BlockFactor), int(data.shape[1] / self.BlockFactor))) 
+            # BlockData = np.zeros((int(data.shape[0] / self.BlockFactor), int(data.shape[1] / self.BlockFactor))) 
 
-            self.BlockHeader['CDELT1'] = (header['CDELT1']) * self.BlockFactor
-            self.BlockHeader['CDELT2'] = (header['CDELT2']) * self.BlockFactor
-            self.BlockHeader['CRPIX1'] = (header['CRPIX1']) / self.BlockFactor 
-            self.BlockHeader['CRPIX2'] = (header['CRPIX2']) / self.BlockFactor 
+            # self.BlockHeader['CDELT1'] = (header['CDELT1']) * self.BlockFactor
+            # self.BlockHeader['CDELT2'] = (header['CDELT2']) * self.BlockFactor
+            # self.BlockHeader['CRPIX1'] = (header['CRPIX1']) / self.BlockFactor 
+            # self.BlockHeader['CRPIX2'] = (header['CRPIX2']) / self.BlockFactor 
 
-            # data, _ = reproject_interp((data, header), self.BlockHeader, shape_out=(np.shape(BlockData)))
-            # data = self._cropNanBorder(data, np.shape(BlockData))
-            data = self.reprojectWrapper(data, header, self.BlockHeader, BlockData) #use original data to avoid blurring from reproject_interp
+            data = self.reprojectWrapper(data, self.OrigHeader, self.BlockHeader, self.BlockData) #use original data to avoid blurring from reproject_interp
 
-            # coords_data, _ = reproject_interp((coords_data, header), self.BlockHeader, shape_out=(np.shape(BlockData)))
-            # coords_data = self._cropNanBorder(coords_data, np.shape(BlockData))
-            coords_data = self.reprojectWrapper(data, header, self.BlockHeader, BlockData) #use original data to avoid blurring from reproject_interp
 
+            # coords_data = self.reprojectWrapper(coords_data, self.OrigHeader, self.BlockHeader, self.BlockData) #use original data to avoid blurring from reproject_interp
+            coords_data, _ = reproject_exact((coords_data, self.OrigHeader), self.BlockHeader, shape_out=self.BlockData.shape)
+            coords_data = self._cropNanBorder(coords_data, self.BlockData.shape)
+
+
+            #To Do: Save this stage of coords data that is reprojected down and skeletonized for debugging
+            hdu = fits.PrimaryHDU(coords_data, header=self.BlockHeader)
+            try:
+                hdu.writeto('composite_blocked.fits', overwrite=True)
+            except Exception as e:
+                print('write failed:', e)
         else:
             print(f'scale: {self.Scale}')
         
-        #step 5: Process the composite image
+
+        print('processing coords data')
+        #Step 3: Process the composite image
         kernel_size = 3
         kernel = np.ones((kernel_size, kernel_size), np.uint8)
         dilated_image = cv2.morphologyEx(coords_data, cv2.MORPH_CLOSE, kernel)
-        dilated_image = skeletonize(dilated_image)
-        coords_data= dilated_image.astype(np.uint8)
+        dilated_image = skeletonize(dilated_image.astype(bool))
+        coords_data = dilated_image.astype(np.uint8)
 
-        #Step 6: Remove junctions
+        #Step 4: Remove junctions
         fil_centers = copy.deepcopy(coords_data)
         junctions = AF.getSkeletonIntersection(np.array(fil_centers*255))
-        IntersectsRemoved = AF.removeJunctions(junctions, fil_centers, dot_size = 3) #check intersects removed
+        IntersectsRemoved = AF.removeJunctions(junctions, fil_centers, dot_size = 1) #check intersects removed
         IntersectsRemoved[IntersectsRemoved > 0] = 1
         IntersectsRemoved[IntersectsRemoved < 0] = 0
+        fil_centers = IntersectsRemoved
+
+        rep_centers = fil_centers.copy()
+        # coords_data = filter_short_components(coords_data, min_len_pix = 10) #optional because segmentation has min length parameter
+
+        hdu = fits.PrimaryHDU(coords_data, header=self.BlockHeader)
+        try:
+            hdu.writeto('skeletonized_blocked.fits', overwrite=True)
+        except Exception as e:
+            print('write failed:', e)
 
 
-        try: 
-
-            fil_centers = IntersectsRemoved
+        #reproject this processed image back and detect sources
+        rep_centers, _ = reproject_exact((rep_centers , self.BlockHeader), self.OrigHeader, shape_out=self.OrigData.shape) #nearest neighbor
+        rep_centers  = self._cropNanBorder(rep_centers, self.OrigData.shape)
+        rep_centers[rep_centers > 0] = 1
 
         #Step 7: Create a filament dictionary 
+        print('creating dictionary')
+        data_new = self.getRegionData(use_Regions)
+        label_val = 3
+        Scale = self._getScale( self.FitsFile)
+        Scale = Scale.replace("pc", '')
+        Scale = float(Scale)
+    
+        min_area =  int(8*min_scale**2/(self.Scalepix**2)) #aspect ratio of 8, all images used on blocked image of 16pc character. 
 
-            data_new = self.getRegionData(use_Regions)
-            img = np.zeros_like(self.BlockData, dtype=float) # make sure it's numeric for reproject_interp
-            label_val = 3
+        segment_map = detect_sources(rep_centers, threshold=.5, npixels=min_area)
+        segm_deblend = deblend_sources(rep_centers, segment_map, npixels=min_area, nlevels=32, contrast=0.001,progress_bar=False)
+        imgNew = np.zeros_like(self.OrigData, dtype = float)
 
-            print('creating dictionary')
-            segment_map = detect_sources(fil_centers, threshold=.5, npixels=10)
-            segm_deblend = deblend_sources(fil_centers, segment_map, npixels=10, nlevels=32, contrast=0.001,progress_bar=False)
+        for label in segm_deblend.labels:
+            mask = segm_deblend.data == label # Find pixels that belong to this segment
+            imgNew[mask] = label_val
+            label_val+=10
 
-            for label in segm_deblend.labels:
-                mask = segm_deblend.data == label # Find pixels that belong to this segment
-                img[mask] = label_val
-                label_val+=10
+        # Create a labeled mask for all filaments
+        segment_info_reprojected = {}
+        imgNew = np.rint(imgNew).astype(int)
 
-            # Reproject with interpolation (can blur labels slightly)
-            imgNew, _ = reproject_exact((img, self.BlockHeader), self.OrigHeader, shape_out=self.OrigData.shape)
-            imgNew = self._cropNanBorder(imgNew, self.OrigData.shape)
+        print(f'max label is: {label_val}, number of filaments: {label_val//10}')
 
+        # Extract coordinates for each label
+        for lab in range(3, label_val + 1, 10):
+            white_mask = (imgNew >= lab -1) & (imgNew <= lab + 1)
+            if not np.any(white_mask):
+                continue 
+            coords = np.argwhere(white_mask)
+            img_skel = skeletonize(white_mask.astype(bool))
+            length = len(np.argwhere(img_skel)) #determine length from skeletonized filament
+            coords_list = [(int(x), int(y)) for y, x in coords]
+            region = self.getRegion(white_mask, data_new)
+            segment_info_reprojected[lab] = (coords_list, length, region)
 
-            # Create a labeled mask for all filaments
-            segment_info_reprojected = {}
-            imgNew = np.rint(imgNew).astype(int)
+        print('Dictionary reprojected.')
+        print(np.max(segment_info_reprojected.keys()))
 
-            print(f'max label is: {label_val}')
+        # Debugging
+        hdu = fits.PrimaryHDU(imgNew, header=self.OrigHeader)
+        hdu.writeto(f'imgNew_reprojected_{Scale}_{self.Label}.fits', overwrite=True)
+        print("Saved reprojected filament map to imgNew_reprojected.fits")
 
-            # Extract coordinates for each label
-            for lab in range(3, label_val + 1, 10):
-                white_mask = (imgNew >= lab -1) & (imgNew <= lab + 1)
-                if not np.any(white_mask):
-                    continue 
-                coords = np.argwhere(white_mask)
-                img_skel = skeletonize(white_mask.astype(bool))
-                length = len(np.argwhere(img_skel)) #determine length from skeletonized filament
-                coords_list = [(int(x), int(y)) for y, x in coords]
-                region = self.getRegion(white_mask, data_new)
-                segment_info_reprojected[lab] = (coords_list, length, region)
+        #step 6: Define PSF 
+        #step 5: Set fwhmval for PSF model
 
-            print('Dictionary reprojected.')
-            print(np.max(segment_info_reprojected.keys()))
-
-            # Debugging
-            hdu = fits.PrimaryHDU(imgNew, header=self.OrigHeader)
-            hdu.writeto('imgNew_reprojected.fits', overwrite=True)
-            print("Saved reprojected filament map to imgNew_reprojected.fits")
+        # fwhmval = int(Scale/self.Scalepix)
+        fwhmval = int(16/self.Scalepix) #double counting effect of blocking with larger psf AND blocking??
 
 
-        #__________________________________________________________________________________
+        print('PSF time')
+        psf_model = CircularGaussianPRF(flux=1, fwhm=fwhmval)  # No longer divide fwhmval/2.35
+        psf_model.x_0.fixed = True  # allowing this to vary when x_coords, y_coords given no intentional offset shows most would only move by ~0.125 pix, so neglect any shift
+        psf_model.y_0.fixed = True
+        psf_model.fwhm.fixed = False
+        psf_model.flux.min = 0.0  #### -1. * np.std(noise)  # keep all models positive
+        psf_model.fwhm.max = fwhmval * 2.0  # do not allow the fwhm to encroach into next larger single scale interval
+        psf_model.fixed
 
+        # step 7: Apply PSF to create model
+        net_scaling_factor = 3.2728865403756338
+        y_coords, x_coords = np.where(coords_data > 0)
+        init_params = QTable()
+        init_params['x'] = x_coords + 0.0
+        init_params['y'] = y_coords + 0.0
+        init_params['flux'] = data[coords_data > 0] * net_scaling_factor
 
-            #step 6: Define PSF 
-            print('PSF time')
-            psf_model = CircularGaussianPRF(flux=1, fwhm=fwhmval) #No longer divide fwhmval/2.35
-            psf_model.x_0.fixed = True #allowing this to vary when x_coords, y_coords given no intentional offset shows most would only move by ~0.125 pix, so neglect any shift
-            psf_model.y_0.fixed = True
-            psf_model.fwhm.fixed = False
-            psf_model.flux.min = 0. #### -1. * np.std(noise)  #keep all models positive
-            psf_model.fwhm.max = fwhmval * 2.0 #do not allow the fwhm to encroach into next larger single scale interval
-            psf_model.fixed
+        # Define PSF fitting region
+        psf_shape = (2 * int(np.ceil(fwhmval)) + 1, 2 * int(np.ceil(fwhmval)) + 1)
+        fit_shape = psf_shape
 
-            #step 7: Apply PSF to create model
-            net_scaling_factor = 3.2728865403756338
-            y_coords, x_coords = np.where(coords_data > 0)
-            init_params = QTable()
-            init_params['x'] = x_coords+0.0
-            init_params['y'] = y_coords+0.0
-            init_params['flux'] = data[coords_data>0]*net_scaling_factor
-
-            # Define PSF fitting region
-            psf_shape = (2*int(np.ceil(fwhmval)) + 1, 2*int(np.ceil(fwhmval)) + 1)
-            fit_shape = psf_shape
+        try:
             grouper = SourceGrouper(min_separation=1)
-            psfphot = PSFPhotometry(psf_model, fit_shape, grouper = grouper, fitter_maxiters = 2) # !!! 2 iterations used, could minimally explore higher but might not be needed with good guess and could lead to divergence?
+            psfphot = PSFPhotometry(
+                psf_model,
+                fit_shape,
+                grouper=grouper,
+                fitter_maxiters=2
+            ) 
             phot = psfphot(data, error=self.NoiseMap, init_params=init_params)
-
-        
-            #model
-            resid = psfphot.make_residual_image(data)
-            model = (data - resid)  # Model is data minus residuals
-
-            #Scale model again
-            ratio=data[model != 0]/model[model != 0]
-            ratiouseful=ratio[(ratio>0.05) & (ratio<6.)]
-            ratiomean,ratiomedian,ratiostd=sigma_clipped_stats(ratiouseful, sigma=2, maxiters=5)
-            globalfactor=ratiomedian
-            model = globalfactor * model
-
-            #Project back
-            # model, _ = reproject_interp((model, self.BlockHeader), header, shape_out=(np.shape(self.OrigData)))
-            # model = self._cropNanBorder(model, np.shape(self.OrigData))
-            model = self.reprojectWrapper(model, self.BlockHeader, header, self.OrigData)
-
-            if(write_fits):
-                out_path = Path(f"{self.BaseDir}/{self.Label}/SyntheticMap/{self.FitsFile}_SyntheticMap.fits")
-                hdu = fits.PrimaryHDU(model, header=header)
-                hdu.writeto(out_path, overwrite=True)
-
-            if extract_Properties: 
-            #step 10: Set partameters for Density Calculations
-                inclination = 9 * np.pi / 180  # Inclination in radians
-                sSFR = 1.74 #get specific SFR*
-                x_fit = phot['x_fit']
-                y_fit = phot['y_fit']
-                flux_fit = phot['flux_fit']
-
-            # Step 11: Create a 2D map to associate flux values with filament spine pixels
-                flux_map = np.zeros_like(self.BlockData, dtype=float) #use blocked data since PSF ran on blocked data
-                for x, y, f in zip(x_fit.astype(int), y_fit.astype(int), flux_fit):
-                    flux_map[y, x] = f  
-
-                I_F770W_16pc = flux_map*globalfactor
-
-                #reproject flux_map to normal size now
-                # I_F770W_16pc, _ = reproject_interp((I_F770W_16pc, self.BlockHeader), self.OrigHeader, shape_out=(np.shape(self.OrigData)))
-                # I_F770W_16pc = self._cropNanBorder(I_F770W_16pc, np.shape(self.OrigData))
-                I_F770W_16pc = self.reprojectWrapper(I_F770W_16pc, self.BlockHeader, self.OrigHeader, self.OrigData)
-
-            # Step 12: Extract Density and mass
-                print('extracting density')
-                I_F770W_16pc = I_F770W_16pc * np.cos(np.radians(inclination))
-                log_C_F770W = -0.21 * (np.log10(sSFR) + 10.14)  
-                valid_mask_1 = I_F770W_16pc > 0
-                x = np.zeros_like(I_F770W_16pc)
-                x[valid_mask_1] = np.log(I_F770W_16pc[valid_mask_1]) - log_C_F770W
-                log_I_CO_2_1_16pc = 0.88 * (x - 1.44) + 1.36
-                I_CO__2_1_16pc = 10**log_I_CO_2_1_16pc
-                I_CO__2_1_16pc[~valid_mask_1] = 0
-
-                # Use PHANGS alphaCO
-                if use_dynamic_alphaCO is not None:
-                    print(f'Using dynamic alphaCO')
-                    dir_path = use_dynamic_alphaCO
-                    found_alphaCO = False
-
-                    for file in os.listdir(dir_path):
-                        galaxy = self.Label.split("_")[0]  # Get first part of label
-                        if galaxy.lower() in file.lower() and alphaCO_tag.lower() in file.lower():
-                            print("Matched alphaCO map!")
-                            fits_path = os.path.join(dir_path, file)
-
-                            with fits.open(fits_path, ignore_missing=True) as hdul:
-                                alphaCO = np.array(hdul[0].data)  # region map
-                                header = hdul[0].header
-
-                            # Reproject into same frame
-                            # alphaCO, _ = reproject_interp((alphaCO, header), self.OrigHeader, shape_out=np.shape(self.OrigData))
-                            # alphaCO = self._cropNanBorder(alphaCO, np.shape(self.OrigData))
-                            alphaCO = self.reprojectWrapper(alphaCO, header, self.OrigHeader, self.OrigData)
-
-                            assert(np.shape(alphaCO) == np.shape(self.OrigData))
-
-                            Molecular_Mass = alphaCO * I_CO__2_1_16pc  # Units of Solar mass per pix^2
-                            # Create masks for NaNs (only NaNs, not inf)
-                            nan_mask = np.isnan(Molecular_Mass)
-                            n_nans = np.count_nonzero(nan_mask)
-                            
-                            # debugging step
-
-                            fits.writeto("Molecular_Mass.fits", Molecular_Mass, overwrite=True)
-                            fits.writeto("alphaCO.fits", alphaCO, overwrite=True)
-                            fits.writeto("I_CO_2_1_16pc.fits", I_CO__2_1_16pc, overwrite=True)
-                            fits.writeto("nan_mask.fits", nan_mask.astype(np.uint8), overwrite=True)  
-                            # (save mask as 0/1 integers so it’s more readable)
-
-                            print("Saved Molecular_Mass, alphaCO, I_CO_2_1_16pc, and nan_mask as FITS files.")
-
-
-                            print('Molecular Mass computed')
-                            if n_nans == 0:
-                                print("No NaNs detected in Molecular_Mass.")
-                            else:
-                                print(f"Detected {n_nans} NaN pixel(s) in Molecular_Mass. Replacing with 5.5 * I_CO__2_1_16pc where possible...")
-
-                                # candidate replacement array
-                                replacement = 5.5 * I_CO__2_1_16pc
-
-                                # mask where replacement is finite (so we don't inject NaNs)
-                                replacement_ok = np.isfinite(replacement)
-
-                                # positions we can actually replace: originally NaN AND replacement finite
-                                can_replace = nan_mask & replacement_ok
-                                cannot_replace = nan_mask & ~replacement_ok
-
-                                # do the replacement (in-place)
-                                Molecular_Mass[can_replace] = replacement[can_replace]
-
-                                # report results
-                                n_replaced = np.count_nonzero(can_replace)
-                                n_remaining = np.count_nonzero(cannot_replace)
-
-                                print(f"Replaced {n_replaced} pixel(s).")
-                                if n_remaining:
-                                    print(f"{n_remaining} pixel(s) remain NaN because replacement values were not finite.")
-                                else:
-                                    print("No remaining NaNs; all NaNs successfully replaced.")
-                            found_alphaCO = True
-                            break
-
-                    if not found_alphaCO:
-                        print(f'Could not find {alphaCO_tag} alphaCO file for {self.Label}')
-                        Molecular_Mass = 5.5 * I_CO__2_1_16pc  # Default value
-                else:
-                    Molecular_Mass = 5.5 * I_CO__2_1_16pc  # Default value
-
-
-            #step 13: Save Data
-            print('converting to csv data')
-            csv_data = {}
-
-            Line_Density = []
-            Lengths = []
-            Mass = []
-            curvatures = []
-            regions = []
+            tag = 'Grouped'
+        except MemoryError:
+            psfphot = PSFPhotometry(
+                psf_model,
+                fit_shape,
+                grouper=None,
+                fitter_maxiters=2
+            ) 
+            phot = psfphot(data, error=self.NoiseMap, init_params=init_params)
+            tag = 'NotGrouped'
             
-            for fil_id, pix_info in segment_info_reprojected.items():
-                mass_sum = []
-                fil_length = len(pix_info[1])
-                img = np.zeros_like(Molecular_Mass)
+        #model
+        resid = psfphot.make_residual_image(data)
+        model = (data - resid)  # Model is data minus residuals
 
-                x_coords = []
-                y_coords = []
+        #Scale model again
+        ratio=data[model != 0]/model[model != 0]
+        ratiouseful=ratio[(ratio>0.05) & (ratio<6.)]
+        ratiomean,ratiomedian,ratiostd=sigma_clipped_stats(ratiouseful, sigma=2, maxiters=5)
+        globalfactor=ratiomedian
+        model = globalfactor * model
 
-                for values in pix_info[0]:
-                    x = values[0]
-                    y = values[1]
-                    mass_sum.append(Molecular_Mass[y, x])
-                    img[y, x] = Molecular_Mass[y, x]
-                    x_coords.append(x)
-                    y_coords.append(y)
+        #Project back
+        # model, _ = reproject_interp((model, self.BlockHeader), header, shape_out=(np.shape(self.OrigData)))
+        # model = self._cropNanBorder(model, np.shape(self.OrigData))
+        model = self.reprojectWrapper(model, self.BlockHeader, header, self.OrigData)
 
-                Line_Density.append(np.sum(mass_sum) / (self.Scalepix * fil_length))
-                Lengths.append(self.Scalepix * fil_length)
-                Mass.append(np.sum(mass_sum))
-                orientation, curvature, theta = rht_curvature_from_coords(zip(x_coords, y_coords), shape = np.shape(Molecular_Mass), radius= int(round(self.Scalepix)), ntheta=180, background_percentile=25)
-                curvatures.append(curvature)
-                regions.append(pix_info[2])
+        if(write_fits):
+            out_path = Path(f"{self.BaseDir}/{self.Label}/SyntheticMap/{self.FitsFile}_SyntheticMap.fits")
+            hdu = fits.PrimaryHDU(model, header=header)
+            hdu.writeto(out_path, overwrite=True)
 
-            # Store in dictionary with scale-specific column names
-            assert(len(regions) == len(Lengths))
-            csv_data[f'Line_Density_{Scale}'] = Line_Density
-            csv_data[f'Length_{Scale}'] = Lengths
-            csv_data[f'Mass_{Scale}'] = Mass
-            csv_data[f'Curvature_{Scale}'] = curvatures
-            csv_data[f'Regions_{Scale}'] = regions
-            print(len(Line_Density), len(Lengths), len(Mass), len(curvatures), len(regions))
-            assert len(set([len(Line_Density), len(Lengths), len(Mass), len(curvatures), len(regions)])) == 1, "List length mismatch!"
+        if extract_Properties: 
+        #step 10: Set partameters for Density Calculations
+            inclination = 9 * np.pi / 180  # Inclination in radians
+            sSFR = 1.74 #get specific SFR*
+            x_fit = phot['x_fit']
+            y_fit = phot['y_fit']
+            flux_fit = phot['flux_fit']
 
-            # Convert to DataFrame
-            df = pd.DataFrame(csv_data)
+        # Step 11: Create a 2D map to associate flux values with filament spine pixels
+            flux_map = np.zeros_like(self.BlockData, dtype=float) #use blocked data since PSF ran on blocked data
+            x_fit_int = np.clip(x_fit.astype(int), 0, flux_map.shape[1]-1)
+            y_fit_int = np.clip(y_fit.astype(int), 0, flux_map.shape[0]-1)
 
-            # Save to CSV
-            # CSV
-            csv_path = Path(self.BaseDir) / self.Label / "SyntheticMap" / f"{self.FitsFile}_DensityData.csv"
-            csv_path.parent.mkdir(parents=True, exist_ok=True)  # make sure dir exists
-            if csv_path.exists():
-                csv_path.unlink()  # delete existing file first
-            df.to_csv(csv_path, index=False)
+            for x, y, f in zip(x_fit_int, y_fit_int, flux_fit):
+                flux_map[y, x] = f
 
-            # FITS
-            fits_path = Path(self.BaseDir) / self.Label / f"{self.FitsFile}_MolecularMassMap.fits"
-            fits_path.parent.mkdir(parents=True, exist_ok=True)
-            hdu = fits.PrimaryHDU(Molecular_Mass, header=self.OrigHeader)
-            hdu.writeto(fits_path, overwrite=True)
 
-        except Exception as e:
-            print(f"Error occurred for {self.FitsFile}:", str(e))  
+            I_F770W_16pc = flux_map*globalfactor
+
+            #reproject flux_map to normal size now
+            # I_F770W_16pc, _ = reproject_interp((I_F770W_16pc, self.BlockHeader), self.OrigHeader, shape_out=(np.shape(self.OrigData)))
+            # I_F770W_16pc = self._cropNanBorder(I_F770W_16pc, np.shape(self.OrigData))
+            I_F770W_16pc = self.reprojectWrapper(I_F770W_16pc, self.BlockHeader, self.OrigHeader, self.OrigData)
+
+        # Step 12: Extract Density and mass
+            print('extracting density')
+            I_F770W_16pc = I_F770W_16pc * np.cos(np.radians(inclination))
+            log_C_F770W = -0.21 * (np.log10(sSFR) + 10.14)  
+            valid_mask_1 = I_F770W_16pc > 0
+            x = np.zeros_like(I_F770W_16pc)
+            x[valid_mask_1] = np.log(I_F770W_16pc[valid_mask_1]) - log_C_F770W
+            log_I_CO_2_1_16pc = 0.88 * (x - 1.44) + 1.36
+            I_CO__2_1_16pc = 10**log_I_CO_2_1_16pc
+            I_CO__2_1_16pc[~valid_mask_1] = 0
+
+            # Use PHANGS alphaCO
+            if use_dynamic_alphaCO is not None:
+                print(f'Using dynamic alphaCO')
+                dir_path = use_dynamic_alphaCO
+                found_alphaCO = False
+
+                for file in os.listdir(dir_path):
+                    galaxy = self.Label.split("_")[0]  # Get first part of label
+                    if galaxy.lower() in file.lower() and alphaCO_tag.lower() in file.lower():
+                        print("Matched alphaCO map!")
+                        fits_path = os.path.join(dir_path, file)
+
+                        with fits.open(fits_path, ignore_missing=True) as hdul:
+                            alphaCO = np.array(hdul[0].data)  # region map
+                            header = hdul[0].header
+
+                        # Reproject into same frame
+                        # alphaCO, _ = reproject_interp((alphaCO, header), self.OrigHeader, shape_out=np.shape(self.OrigData))
+                        # alphaCO = self._cropNanBorder(alphaCO, np.shape(self.OrigData))
+                        alphaCO = self.reprojectWrapper(alphaCO, header, self.OrigHeader, self.OrigData)
+
+                        assert(np.shape(alphaCO) == np.shape(self.OrigData))
+
+                        Molecular_Mass = alphaCO * I_CO__2_1_16pc  # Units of Solar mass per pix^2
+                        # Create masks for NaNs (only NaNs, not inf)
+                        nan_mask = np.isnan(Molecular_Mass)
+                        n_nans = np.count_nonzero(nan_mask)
+                        
+                        # debugging step
+
+                        fits.writeto("Molecular_Mass.fits", Molecular_Mass, overwrite=True)
+                        fits.writeto("alphaCO.fits", alphaCO, overwrite=True)
+                        fits.writeto("I_CO_2_1_16pc.fits", I_CO__2_1_16pc, overwrite=True)
+                        fits.writeto("nan_mask.fits", nan_mask.astype(np.uint8), overwrite=True)  
+                        # (save mask as 0/1 integers so it’s more readable)
+
+                        print("Saved Molecular_Mass, alphaCO, I_CO_2_1_16pc, and nan_mask as FITS files.")
+
+
+                        print('Molecular Mass computed')
+                        if n_nans == 0:
+                            print("No NaNs detected in Molecular_Mass.")
+                        else:
+                            print(f"Detected {n_nans} NaN pixel(s) in Molecular_Mass. Replacing with 5.5 * I_CO__2_1_16pc where possible...")
+
+                            # candidate replacement array
+                            replacement = 5.5 * I_CO__2_1_16pc
+
+                            # mask where replacement is finite (so we don't inject NaNs)
+                            replacement_ok = np.isfinite(replacement)
+
+                            # positions we can actually replace: originally NaN AND replacement finite
+                            can_replace = nan_mask & replacement_ok
+                            cannot_replace = nan_mask & ~replacement_ok
+
+                            # do the replacement (in-place)
+                            Molecular_Mass[can_replace] = replacement[can_replace]
+
+                            # report results
+                            n_replaced = np.count_nonzero(can_replace)
+                            n_remaining = np.count_nonzero(cannot_replace)
+
+                            print(f"Replaced {n_replaced} pixel(s).")
+                            if n_remaining:
+                                print(f"{n_remaining} pixel(s) remain NaN because replacement values were not finite.")
+                            else:
+                                print("No remaining NaNs; all NaNs successfully replaced.")
+                        found_alphaCO = True
+                        break
+
+                if not found_alphaCO:
+                    print(f'Could not find {alphaCO_tag} alphaCO file for {self.Label}')
+                    Molecular_Mass = 5.5 * I_CO__2_1_16pc  # Default value
+            else:
+                Molecular_Mass = 5.5 * I_CO__2_1_16pc  # Default value
+
+
+        #step 13: Save Data
+        print('converting to csv data')
+        csv_data = {}
+
+        Line_Density = []
+        Lengths = []
+        Mass = []
+        curvatures = []
+        regions = []
+        
+        for fil_id, pix_info in segment_info_reprojected.items():
+            mass_sum = []
+            fil_length = pix_info[1]
+            img = np.zeros_like(Molecular_Mass)
+
+            x_coords = []
+            y_coords = []
+
+            for values in pix_info[0]:
+                x = values[0]
+                y = values[1]
+                mass_sum.append(Molecular_Mass[y, x])
+                img[y, x] = Molecular_Mass[y, x]
+
+            img = img > 0
+            curvature_img = skeletonize(img) #use centerline coordinates for curvature
+            white_mask = curvature_img == True   # define mask of skeleton pixels
+            curvature_coords = np.argwhere(white_mask)  # get coordinates
+
+            Line_Density.append(np.sum(mass_sum) / (self.Scalepix * fil_length))
+            Lengths.append(self.Scalepix * fil_length)
+            Mass.append(np.sum(mass_sum))
+            orientation, curvature, theta = rht_curvature_from_coords(curvature_coords.tolist(), shape = np.shape(Molecular_Mass), radius= int(round(self.Scalepix)), ntheta=180, background_percentile=25)
+            curvatures.append(curvature)
+            regions.append(pix_info[2])
+
+        # Store in dictionary with scale-specific column names
+        assert(len(regions) == len(Lengths))
+        csv_data[f'Line_Density_{Scale}'] = Line_Density
+        csv_data[f'Length_{Scale}'] = Lengths
+        csv_data[f'Mass_{Scale}'] = Mass
+        csv_data[f'Curvature_{Scale}'] = curvatures
+        csv_data[f'Regions_{Scale}'] = regions
+        print(len(Line_Density), len(Lengths), len(Mass), len(curvatures), len(regions))
+        assert len(set([len(Line_Density), len(Lengths), len(Mass), len(curvatures), len(regions)])) == 1, "List length mismatch!"
+
+        # Convert to DataFrame
+        df = pd.DataFrame(csv_data)
+
+        # Save to CSV
+        # CSV
+        csv_path = Path(self.BaseDir) / self.Label / "SyntheticMap" / f"{self.FitsFile}_DensityData_{tag}.csv"
+        csv_path.parent.mkdir(parents=True, exist_ok=True)  # make sure dir exists
+        if csv_path.exists():
+            csv_path.unlink()  # delete existing file first
+        df.to_csv(csv_path, index=False)
+
+        # FITS
+        path = Path(self.BaseDir) / self.Label / 'Molecular_Mass'
+        os.makedirs(path, exist_ok=True)
+        fits_path = Path(self.BaseDir) / self.Label / 'Molecular_Mass'/ f"{self.FitsFile}_MolecularMassMap_{tag}.fits"
+        fits_path.parent.mkdir(parents=True, exist_ok=True)
+        hdu = fits.PrimaryHDU(Molecular_Mass, header=self.OrigHeader)
+        hdu.writeto(fits_path, overwrite=True)
 
 
 
@@ -1595,7 +1633,7 @@ def rht_curvature_from_coords(coords, shape, radius=10, ntheta=180, background_p
     """
     # 1. Create mask of selected pixels
     mask = np.zeros(shape, dtype=bool)
-    for x,y in coords:
+    for y,x  in coords:
         mask[y, x] = True
 
     # 2. Run RHT
@@ -1833,3 +1871,52 @@ def circ_CI(theta, weights=None, u_ci=0.67, axis=0):
     samp_cis = np.vstack([mean_ang - ci, mean_ang + ci])
 
     return samp_cis
+
+def filter_short_components(binary_image, min_len_pix):
+    """
+    Removes connected components shorter than a given length threshold.
+    Automatically detects whether components are already skeletonized.
+
+    Parameters
+    ----------
+    binary_image : 2D array (bool or int)
+        Input binary mask (True/1 for object pixels).
+    min_len_pix : int
+        Minimum length threshold (in pixels) for keeping components.
+
+    Returns
+    -------
+    filtered_image : 2D np.ndarray (uint8)
+        Binary image with short components removed.
+    """
+    if binary_image.dtype != bool:
+        binary_image = binary_image.astype(bool)
+
+    # Label connected components
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+        binary_image.astype(np.uint8), connectivity=8
+    )
+
+    filtered_image = np.copy(binary_image)
+
+    for label_id in range(1, num_labels):  # skip background
+        component_mask = (labels == label_id)
+        if not np.any(component_mask):
+            continue
+
+        # --- Detect if already skeletonized ---
+        neighbors = ndimage.convolve(component_mask.astype(int),
+                                     np.ones((3, 3)),
+                                     mode='constant', cval=0)
+        avg_neighbors = np.mean(neighbors[component_mask])
+        is_skeleton = avg_neighbors < 2.5  # empirically safe threshold
+
+        # Skeletonize if needed
+        skeleton = component_mask if is_skeleton else skeletonize(component_mask)
+
+        filament_length = np.sum(skeleton)
+
+        if filament_length < min_len_pix:
+            filtered_image[component_mask] = 0
+
+    return filtered_image.astype(np.uint8)
