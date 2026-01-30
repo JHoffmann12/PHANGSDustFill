@@ -883,7 +883,7 @@ class FilamentMap:
     def blurComposite(self, set_blur_as_prob = True, write_fits = True):
 
         """
-        blur the composite so it is not merely a stack of lines
+        blur the originally dimesnioned composite image so it is not merely a stack of lines. To blur the reproected/dpwnsampled composite, adjust scalepix. 
 
         Parameters:
         - set_blur_as_prob (bool): set the blurred composite to be the probability map. 
@@ -1072,7 +1072,8 @@ class FilamentMap:
     def getFilamentLengthHistogram(self, probability_threshold, write_fig = True):
 
         """
-        Create a histogram of filament lengths in parsecs
+        Create a histogram of filament lengths in parsecs. 
+        NOT RELIABLE. 
 
         Parameters:
         - probability_threshold (float): Used here in the plot name. Changing this parameter will change filament lengths. 
@@ -1167,7 +1168,7 @@ class FilamentMap:
                     data = np.array(hdul[0].data)  # region map
                     header = hdul[0].header
 
-                data_new = self.reprojectWrapper(data, header, self.OrigHeader, self.OrigData)
+                data_new = self.reprojectWrapper(data, header, self.BlockHeader, self.BlockData) #use reprojected down data
                 return data_new #return region file reprojected into original file shape
             
         print(f'could not find file in {dir}')
@@ -1229,7 +1230,7 @@ class FilamentMap:
         Scale = Scale.replace("pc", '')
         Scale = float(Scale)
     
-        min_area =  int(8*min_scale**2/(self.Scalepix**2)) #aspect ratio of 8, all images used on blocked image of 16pc character. 
+        min_area =  int(8*min_scale**2/(self.Scalepix**2)) #aspect ratio of 8, all images used on blocked image of 16pc character. KEEP AN EYE ON THIS LINE. 
 
         segment_map = detect_sources(rep_centers, threshold=.5, npixels=min_area)
         segm_deblend = deblend_sources(rep_centers, segment_map, npixels=min_area, nlevels=32, contrast=0.001,progress_bar=False)
@@ -1253,10 +1254,10 @@ class FilamentMap:
                 continue 
             coords = np.argwhere(white_mask)
             img_skel = skeletonize(white_mask.astype(bool))
-            length = len(np.argwhere(img_skel)) #determine length from skeletonized filament
+            numpix = len(np.argwhere(img_skel)) #determine length from skeletonized filament
             coords_list = [(int(x), int(y)) for y, x in coords]
             region = self.getRegion(white_mask, data_new)
-            segment_info_reprojected[lab] = (coords_list, length, region, lab)
+            segment_info_reprojected[lab] = (coords_list, numpix, region, lab)
 
         print('Dictionary reprojected.')
         print(np.max(segment_info_reprojected.keys()))
@@ -1270,7 +1271,7 @@ class FilamentMap:
     def runPSF(self, coords_data, header, write_fits):
 
         # fwhmval = int(Scale/self.Scalepix)
-        fwhmval = int(16/self.Scalepix) #double counting effect of blocking with larger psf AND blocking??
+        fwhmval = int(16/self.Scalepix) #KEEP AN EYE HERE. 
 
 
         psf_model = CircularGaussianPRF(flux=1, fwhm=fwhmval)  # No longer divide fwhmval/2.35
@@ -1331,7 +1332,7 @@ class FilamentMap:
             out_path = Path(f"{self.BaseDir}/{self.Label}/SyntheticMap/{self.FitsFile}_SyntheticMap.fits")
             hdu = fits.PrimaryHDU(model, header=header)
             hdu.writeto(out_path, overwrite=True)
-        return model, tag
+        return model, tag, globalfactor, phot
 
 
     def getMolecularMass(self, I_CO__2_1_16pc, alphaCO_tag, use_dynamic_alphaCO):
@@ -1420,6 +1421,10 @@ class FilamentMap:
         for fil_id, pix_info in segment_info_reprojected.items():
             mass_sum = []
             fil_length = pix_info[1]
+            if self.BlockFactor != 0:
+                fil_length = fil_length * (1/self.BlockFactor) * self.Scalepix  #adjust length for blocking
+            else:
+                fil_length = fil_length * self.Scalepix  #adjust length for blocking
             img = np.zeros_like(Molecular_Mass)
 
             for values in pix_info[0]:
@@ -1433,8 +1438,8 @@ class FilamentMap:
             white_mask = curvature_img == True   # define mask of skeleton pixels
             curvature_coords = np.argwhere(white_mask)  # get coordinates
 
-            Line_Density.append(np.sum(mass_sum) / (self.Scalepix * fil_length))
-            Lengths.append(self.Scalepix * fil_length)
+            Line_Density.append(np.sum(mass_sum) / (fil_length))
+            Lengths.append(fil_length)
             Mass.append(np.sum(mass_sum))
             orientation, curvature, theta = rht_curvature_from_coords(curvature_coords.tolist(), shape = np.shape(Molecular_Mass), radius= int(round(self.Scalepix)), ntheta=180, background_percentile=25)
             curvatures.append(curvature)
@@ -1470,20 +1475,21 @@ class FilamentMap:
         hdu.writeto(fits_path, overwrite=True)
 
 
-    def extractProperties(self, model, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale):
+    def extractProperties(self, phot, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale, globalfactor):
             inclination = 9 * np.pi / 180  # Inclination in radians
             sSFR = 1.74 #get specific SFR*
-            I_F770W_16pc = model
+            # I_F770W_16pc = model
 
-            # x_fit = phot['x_fit']
-            # y_fit = phot['y_fit']
-            # flux_fit = phot['flux_fit']
-            # flux_map = np.zeros_like(self.BlockData, dtype=float) #use blocked data since PSF ran on blocked data
-            # x_fit_int = np.clip(x_fit.astype(int), 0, flux_map.shape[1]-1)
-            # y_fit_int = np.clip(y_fit.astype(int), 0, flux_map.shape[0]-1)
-            # for x, y, f in zip(x_fit_int, y_fit_int, flux_fit):
-            #     flux_map[y, x] = f
-            # I_F770W_16pc = flux_map*globalfactor
+            #construct the mass map based on center line fits 
+            x_fit = phot['x_fit']
+            y_fit = phot['y_fit']
+            flux_fit = phot['flux_fit']
+            flux_map = np.zeros_like(self.BlockData, dtype=float) #use blocked data since PSF ran on blocked data
+            x_fit_int = np.clip(x_fit.astype(int), 0, flux_map.shape[1]-1)
+            y_fit_int = np.clip(y_fit.astype(int), 0, flux_map.shape[0]-1)
+            for x, y, f in zip(x_fit_int, y_fit_int, flux_fit):
+                flux_map[y, x] = f
+            I_F770W_16pc = flux_map*globalfactor
 
             I_F770W_16pc = I_F770W_16pc * np.cos(np.radians(inclination))
             log_C_F770W = -0.21 * (np.log10(sSFR) + 10.14)  
@@ -1547,15 +1553,15 @@ class FilamentMap:
         
         rep_centers, coords_data = self.processFilamentCenters(coords_data)
 
-        model, tag = self. runPSF(coords_data, header, write_fits)
+        model, tag, globalfactor,phot = self. runPSF(coords_data, header, write_fits)
 
         if extract_Properties: 
             #reproject this processed image back and detect filaments using photutils segmentation
-            rep_centers, _ = reproject_exact((rep_centers , self.BlockHeader), self.OrigHeader, shape_out=self.OrigData.shape) 
+            # rep_centers, _ = reproject_exact((rep_centers , self.BlockHeader), self.OrigHeader, shape_out=self.OrigData.shape) #keep downsampled size
             rep_centers[rep_centers > 0] = 1
             #Create a filament dictionary 
             segment_info_reprojected, Scale = self.createFilamentDictionary(self, rep_centers, use_Regions, min_scale) 
-            self.extractProperties(model, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale)
+            self.extractProperties(phot, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale, globalfactor)
 
 
 #Functions copied directy from FilFinder
