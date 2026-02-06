@@ -1245,10 +1245,10 @@ class FilamentMap:
         Scale = float(Scale)
     
         if self.BlockFactor !=0:
-            min_area =  int(2*((16*self.BlockFactor)/self.Scalepix)**2) #aspect ratio of 8, all images used on blocked image of 16pc character. KEEP AN EYE ON THIS LINE. 
+            min_area =  int(8*(16/(self.BlockFactor*self.Scalepix))**2)  #aspect ratio of 8, all images used on blocked image of 16pc character. KEEP AN EYE ON THIS LINE. 
             imgNew = np.zeros_like(self.BlockData, dtype = float)
         else:
-            min_area =  int(2*(16/self.Scalepix)**2) #aspect ratio of 8, all images used on blocked image of 16pc character. KEEP AN EYE ON THIS LINE. 
+            min_area =  int(8*(16/self.Scalepix)**2) #aspect ratio of 8, all images used on blocked image of 16pc character. KEEP AN EYE ON THIS LINE. 
             imgNew = np.zeros_like(self.OrigData, dtype = float)
 
         #debugging min_area, use 10 for now? 
@@ -1480,6 +1480,7 @@ class FilamentMap:
             Line_Density.append(np.sum(mass_sum) / (fil_length)) #check density
             Lengths.append(fil_length)
             Mass.append(np.sum(mass_sum))
+            #Is the radius correct??
             orientation, curvature, theta = rht_curvature_from_coords(curvature_coords.tolist(), shape = np.shape(Molecular_Mass), radius= int(round(self.Scalepix)), ntheta=180, background_percentile=25) #doule check radius
             curvatures.append(curvature)
             regions.append(pix_info[2])
