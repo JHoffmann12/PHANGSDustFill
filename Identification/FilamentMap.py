@@ -1446,7 +1446,7 @@ class FilamentMap:
 
         return Molecular_Mass
 
-    def convertToCSV(self, Scale, tag, Molecular_Mass, segment_info_reprojected):
+    def convertToCSV(self, Scale, tag, LineDensityMass, SurfaceDensityMass, segment_info_reprojected):
         print('converting to csv data')
         csv_data = {}
 
@@ -1464,13 +1464,13 @@ class FilamentMap:
                 fil_length = fil_length * self.BlockFactor * self.Scalepix  #adjust length for blocking
             else:
                 fil_length = fil_length * self.Scalepix  #adjust length for blocking
-            img = np.zeros_like(Molecular_Mass)
+            img = np.zeros_like(LineDensityMass)
 
             for values in pix_info[0]:
                 x = values[0]
                 y = values[1]
-                mass_sum.append(Molecular_Mass[y, x])
-                img[y, x] = Molecular_Mass[y, x]
+                mass_sum.append(LineDensityMass[y, x])
+                img[y, x] = LineDensityMass[y, x]
 
             img = img > 0
             curvature_img = skeletonize(img) #use centerline coordinates for curvature
@@ -1481,7 +1481,7 @@ class FilamentMap:
             Lengths.append(fil_length)
             Mass.append(np.sum(mass_sum))
             #Is the radius correct??
-            orientation, curvature, theta = rht_curvature_from_coords(curvature_coords.tolist(), shape = np.shape(Molecular_Mass), radius= int(round(self.Scalepix)), ntheta=180, background_percentile=25) #doule check radius
+            orientation, curvature, theta = rht_curvature_from_coords(curvature_coords.tolist(), shape = np.shape(LineDensityMass), radius= int(round(self.Scalepix)), ntheta=180, background_percentile=25) #doule check radius
             curvatures.append(curvature)
             regions.append(pix_info[2])
             label.append(pix_info[3])
@@ -1511,7 +1511,7 @@ class FilamentMap:
         os.makedirs(path, exist_ok=True)
         fits_path = Path(self.BaseDir) / self.Label / 'Molecular_Mass'/ f"{self.FitsFile}_MolecularMassMap_{tag}.fits"
         fits_path.parent.mkdir(parents=True, exist_ok=True)
-        hdu = fits.PrimaryHDU(Molecular_Mass, header=self.OrigHeader)
+        hdu = fits.PrimaryHDU(SurfaceDensityMass, header=self.OrigHeader)
         hdu.writeto(fits_path, overwrite=True)
 
 
@@ -1524,7 +1524,23 @@ class FilamentMap:
         df.to_csv(csv_path, index=False)
 
 
-    def extractProperties(self, phot, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale, globalfactor):
+    def flux_toCo_21(self, I_F770W_16pc):
+            inclination = 9 * np.pi / 180  # Inclination in radians
+            sSFR = 1.74 #get specific SFR*
+            # I_F770W_16pc = model  
+            I_F770W_16pc = I_F770W_16pc * np.cos(np.radians(inclination))
+            log_C_F770W = -0.21 * (np.log10(sSFR) + 10.14)  
+            valid_mask_1 = I_F770W_16pc > 0
+            x = np.zeros_like(I_F770W_16pc)
+            x[valid_mask_1] = np.log(I_F770W_16pc[valid_mask_1]) - log_C_F770W
+            log_I_CO_2_1_16pc = 0.88 * (x - 1.44) + 1.36
+            I_CO__2_1_16pc = 10**log_I_CO_2_1_16pc
+            I_CO__2_1_16pc[~valid_mask_1] = 0
+            return I_CO__2_1_16pc
+    
+
+
+    def extractProperties(self, model, phot, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale, globalfactor):
             inclination = 9 * np.pi / 180  # Inclination in radians
             sSFR = 1.74 #get specific SFR*
             # I_F770W_16pc = model
@@ -1540,19 +1556,15 @@ class FilamentMap:
                 flux_map[y, x] = f
             I_F770W_16pc = flux_map*globalfactor
 
-            I_F770W_16pc = I_F770W_16pc * np.cos(np.radians(inclination))
-            log_C_F770W = -0.21 * (np.log10(sSFR) + 10.14)  
-            valid_mask_1 = I_F770W_16pc > 0
-            x = np.zeros_like(I_F770W_16pc)
-            x[valid_mask_1] = np.log(I_F770W_16pc[valid_mask_1]) - log_C_F770W
-            log_I_CO_2_1_16pc = 0.88 * (x - 1.44) + 1.36
-            I_CO__2_1_16pc = 10**log_I_CO_2_1_16pc
-            I_CO__2_1_16pc[~valid_mask_1] = 0
+            I_CO__2_1_16pc = self.flux_toCo_21(I_F770W_16pc)
+            Model_Co_2_1 = self.flux_toCo_21(model)
 
-            Molecular_Mass = self.getMolecularMass(I_CO__2_1_16pc, alphaCO_tag, use_dynamic_alphaCO)
+            LineDensityMass = self.getMolecularMass(I_CO__2_1_16pc, alphaCO_tag, use_dynamic_alphaCO)
+            SurfaceDensityMass = self.getMolecularMass(Model_Co_2_1, alphaCO_tag, use_dynamic_alphaCO)
 
-            self.convertToCSV(Scale, tag, Molecular_Mass, segment_info_reprojected)
 
+            self.convertToCSV(Scale, tag, LineDensityMass, SurfaceDensityMass, segment_info_reprojected) #line density calculated from placing all flux in filament center and 
+            #surface density extracted fromc enter line of ysnthetic filament map.
 
     def getSyntheticFilamentMapExact(self, min_scale, alphaCO_tag, use_dynamic_alphaCO = None, use_Regions = None, extract_Properties = True, write_fits = True):
 
@@ -1616,7 +1628,7 @@ class FilamentMap:
             rep_centers[rep_centers > 0] = 1
             #Create a filament dictionary 
             segment_info_reprojected, Scale = self.createFilamentDictionary(rep_centers, use_Regions, min_scale) 
-            self.extractProperties(phot, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale, globalfactor)
+            self.extractProperties(phot, model, rep_centers, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale, globalfactor)
 
 
     def getSyntheticFilamentMapApprox(self, min_scale, alphaCO_tag, use_dynamic_alphaCO = None, use_Regions = None, extract_Properties = True, write_fits = True):
@@ -1653,7 +1665,7 @@ class FilamentMap:
         
         rep_centers, coords_data = self.processFilamentCenters(coords_data) #rep_centers has intersects removed and is used for dictionary creation. 
 
-        model, tag, globalfactor, phot = self.runImageLSE(data, coords_data, header, write_fits)
+        model, tag, globalfactor, phot = self.runImageLSE(data, coords_data, header, min_scale, write_fits)
 
         if extract_Properties: 
             #reproject this processed image back and detect filaments using photutils segmentation
@@ -1663,13 +1675,26 @@ class FilamentMap:
             segment_info_reprojected, Scale = self.createFilamentDictionary(rep_centers, use_Regions, min_scale) 
             self.extractProperties(phot, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale, globalfactor)
 
-    def runImageLSE(self, data, coords_data, header, write_fits):
+    def runImageLSE(self, data, coords_data, header, min_scale, write_fits):
 
-        # step 7: Apply PSF to create model
-        net_scaling_factor = 3.2728865403756338
-        initialImage = coords_data* net_scaling_factor
-        alpha = np.dot(initialImage.ravel(), data.ravel()) / np.dot(initialImage.ravel(), initialImage.ravel())
-        model = alpha*initialImage
+
+
+        model = data * coords_data #estimate filament centerline flux by taking the value from the original image
+    
+
+        alpha = np.dot(model.ravel(), data.ravel()) / np.dot(model.ravel(), model.ravel())
+        model = model * alpha #now model centerlines should contain more flux than expected
+        #apply gaussian blur to model to spread out flux and create more realistic filament map. Sigma is set to 1 pixel, which is about the size of the PSF in the blocked image.
+        # Convert structure width from parsecs to pixels
+        structure_width_pixels =   min_scale / self.Scalepix
+        
+        # Calculate sigma for Gaussian convolution
+        sigma = structure_width_pixels / 2.355  # FWHM = 2.355 * sigma -> sigma = FWHM / 2.355
+
+        # Apply Gaussian blur
+        model = gaussian_filter(model, sigma=sigma)
+
+
         # Find non-zero pixels
         y_fit, x_fit = np.nonzero(model)
 
