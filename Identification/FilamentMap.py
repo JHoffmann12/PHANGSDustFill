@@ -1469,7 +1469,7 @@ class FilamentMap:
             for values in pix_info[0]:
                 x = values[0]
                 y = values[1]
-                mass_sum.append(LineDensityMass[y, x])
+                mass_sum.append(LineDensityMass[y, x]) #only center-line values considered in mass sum
                 img[y, x] = LineDensityMass[y, x]
 
             img = img > 0
@@ -1528,7 +1528,7 @@ class FilamentMap:
             inclination = 9 * np.pi / 180  # Inclination in radians
             sSFR = 1.74 #get specific SFR*
             # I_F770W_16pc = model  
-            I_F770W_16pc = I_F770W_16pc * np.cos(np.radians(inclination))
+            I_F770W_16pc = I_F770W_16pc * np.cos(inclination)
             log_C_F770W = -0.21 * (np.log10(sSFR) + 10.14)  
             valid_mask_1 = I_F770W_16pc > 0
             x = np.zeros_like(I_F770W_16pc)
@@ -1540,11 +1540,9 @@ class FilamentMap:
     
 
 
-    def extractProperties(self, model, phot, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale, globalfactor):
-            inclination = 9 * np.pi / 180  # Inclination in radians
-            sSFR = 1.74 #get specific SFR*
-            # I_F770W_16pc = model
+    def extractProperties(self, model, fil_centers, phot, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale, globalfactor):
 
+            model = model *fil_centers #inly consider center line for surface density
             #construct the mass map based on center line fits 
             x_fit = phot['x_fit']
             y_fit = phot['y_fit']
@@ -1554,7 +1552,7 @@ class FilamentMap:
             y_fit_int = np.clip(y_fit.astype(int), 0, flux_map.shape[0]-1)
             for x, y, f in zip(x_fit_int, y_fit_int, flux_fit):
                 flux_map[y, x] = f
-            I_F770W_16pc = flux_map*globalfactor
+            I_F770W_16pc = flux_map*globalfactor #the dictionary only detects centerlines, and so those are the only meaningful pixels. It does not matter that we multiply by fil_centers or not.  
 
             I_CO__2_1_16pc = self.flux_toCo_21(I_F770W_16pc)
             Model_Co_2_1 = self.flux_toCo_21(model)
@@ -1628,8 +1626,7 @@ class FilamentMap:
             rep_centers[rep_centers > 0] = 1
             #Create a filament dictionary 
             segment_info_reprojected, Scale = self.createFilamentDictionary(rep_centers, use_Regions, min_scale) 
-            self.extractProperties(phot, model, rep_centers, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale, globalfactor)
-
+            self.extractProperties(model,  rep_centers, phot, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale, globalfactor)
 
     def getSyntheticFilamentMapApprox(self, min_scale, alphaCO_tag, use_dynamic_alphaCO = None, use_Regions = None, extract_Properties = True, write_fits = True):
 
@@ -1673,7 +1670,7 @@ class FilamentMap:
             rep_centers[rep_centers > 0] = 1
             #Create a filament dictionary 
             segment_info_reprojected, Scale = self.createFilamentDictionary(rep_centers, use_Regions, min_scale) 
-            self.extractProperties(phot, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale, globalfactor)
+            self.extractProperties(model,  rep_centers, phot, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale, globalfactor)
 
     def runImageLSE(self, data, coords_data, header, min_scale, write_fits):
 
