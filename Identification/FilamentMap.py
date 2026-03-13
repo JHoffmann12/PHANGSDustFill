@@ -45,7 +45,7 @@ from skimage.util.dtype import dtype_range
 from skimage.restoration import inpaint
 
 from reproject import reproject_exact, reproject_adaptive, reproject_interp
-
+from PIL import Image
 from photutils.background import Background2D, MedianBackground, LocalBackground, MMMBackground
 from photutils.psf import CircularGaussianPRF, make_psf_model_image, PSFPhotometry, SourceGrouper
 from photutils.segmentation import detect_sources, deblend_sources
@@ -1214,10 +1214,10 @@ class FilamentMap:
         coords_data = dilated_image.astype(np.uint8)
 
         #debugging
-        base = Path(r"C:/Users/jhoffm72/Documents/FilPHANGS/PropertyTestData")
-        out_path = base / f"{self.FitsFile}_filCentersDilated.fits"
-        hdu = fits.PrimaryHDU(coords_data, header=self.BlockHeader)
-        hdu.writeto(out_path, overwrite=True)
+        # base = Path(r"C:/Users/jhoffm72/Documents/FilPHANGS/PropertyTestData")
+        # out_path = base / f"{self.FitsFile}_filCentersDilated.fits"
+        # hdu = fits.PrimaryHDU(coords_data, header=self.BlockHeader)
+        # hdu.writeto(out_path, overwrite=True)
 
 
         #Step 4: Remove junctions
@@ -1229,66 +1229,153 @@ class FilamentMap:
         fil_centers = IntersectsRemoved
 
         #debugging
-        base = Path(r"C:/Users/jhoffm72/Documents/FilPHANGS/PropertyTestData")
-        out_path = base / f"{self.FitsFile}_filCentersProcessed.fits"
-        hdu = fits.PrimaryHDU(fil_centers, header=self.BlockHeader)
-        hdu.writeto(out_path, overwrite=True)
+        # base = Path(r"C:/Users/jhoffm72/Documents/FilPHANGS/PropertyTestData")
+        # out_path = base / f"{self.FitsFile}_filCentersProcessed.fits"
+        # hdu = fits.PrimaryHDU(fil_centers, header=self.BlockHeader)
+        # hdu.writeto(out_path, overwrite=True)
         
         return fil_centers, coords_data        
+
+
+    def removeJunctions(self, binary_mask, dot_size=1):
+        skel = skeletonize(binary_mask.astype(bool))
+
+        if not np.any(skel):
+            return binary_mask.astype(float)
+
+        kernel = np.ones((3, 3), dtype=np.uint8)
+        kernel[1, 1] = 0
+        neighbor_count = convolve(skel.astype(np.uint8), kernel, mode='constant', cval=0)
+        degree_img = neighbor_count * skel.astype(np.uint8)
+
+        raw_junctions = list(map(tuple, np.argwhere(degree_img >= 3)))
+
+        cluster_radius = max(4, dot_size * 4)
+        raw_arr = np.array(raw_junctions) if raw_junctions else np.empty((0, 2))
+
+        if len(raw_arr) == 0:
+            return binary_mask.astype(float)
+
+        clusters = [[raw_arr[i]] for i in range(len(raw_arr))]
+        merged = True
+        while merged:
+            merged = False
+            new_clusters = []
+            used = [False] * len(clusters)
+            for i in range(len(clusters)):
+                if used[i]:
+                    continue
+                current = clusters[i]
+                for j in range(i + 1, len(clusters)):
+                    if used[j]:
+                        continue
+                    if np.linalg.norm(np.mean(current, axis=0) - np.mean(clusters[j], axis=0)) <= cluster_radius:
+                        current = current + clusters[j]
+                        used[j] = True
+                        merged  = True
+                new_clusters.append(current)
+            clusters = new_clusters
+
+        junction_nodes = []
+        for members in clusters:
+            arr    = np.array(members)
+            mean   = arr.mean(axis=0)
+            medoid = arr[np.argmin(np.linalg.norm(arr - mean, axis=1))]
+            junction_nodes.append((int(round(medoid[0])), int(round(medoid[1]))))
+
+        chopped = binary_mask.copy().astype(float)
+        for (r, c) in junction_nodes:
+            r0 = max(0, r - dot_size);  r1 = min(chopped.shape[0], r + dot_size)
+            c0 = max(0, c - dot_size);  c1 = min(chopped.shape[1], c + dot_size)
+            chopped[r0:r1, c0:c1] = 0.0
+
+        return chopped
 
 
     def createFilamentDictionary(self, rep_centers, use_Regions, min_scale):
         data_new = self.getRegionData(use_Regions)
         label_val = 3
-        Scale = self._getScale( self.FitsFile)
+        Scale = self._getScale(self.FitsFile)
         Scale = Scale.replace("pc", '')
         Scale = float(Scale)
-    
-        if self.BlockFactor !=0:
-            min_area =  int(8*(16/(self.BlockFactor*self.Scalepix))**2)  #aspect ratio of 8, all images used on blocked image of 16pc character. KEEP AN EYE ON THIS LINE. 
-            imgNew = np.zeros_like(self.BlockData, dtype = float)
+
+        if self.BlockFactor != 0:
+            min_area = int(8*(16/(self.BlockFactor*self.Scalepix))**2)
+            imgNew = np.zeros_like(self.BlockData, dtype=float)
         else:
-            min_area =  int(8*(16/self.Scalepix)**2) #aspect ratio of 8, all images used on blocked image of 16pc character. KEEP AN EYE ON THIS LINE. 
-            imgNew = np.zeros_like(self.OrigData, dtype = float)
+            min_area = int(8*(16/self.Scalepix)**2)
+            imgNew = np.zeros_like(self.OrigData, dtype=float)
 
-        #debugging min_area, use 10 for now? 
-        min_area = 10
+        min_skel_length = int(4*(16/self.Scalepix))
+        print(f'min_area={min_area}, min_skel_length={min_skel_length}')
 
-        segment_map = detect_sources(rep_centers, threshold=.5, npixels=min_area)
-        segm_deblend = deblend_sources(rep_centers, segment_map, npixels=min_area, nlevels=32, contrast=0.001,progress_bar=False)
+        min_area = 20 #change later 
+        segment_map  = detect_sources(rep_centers, threshold=0.5, npixels=min_area)
+        segm_deblend = deblend_sources(rep_centers, segment_map, npixels=min_area,
+                                    nlevels=32, contrast=0.001, progress_bar=False)
 
         for label in segm_deblend.labels:
-            mask = segm_deblend.data == label # Find pixels that belong to this segment
+            mask = segm_deblend.data == label
             imgNew[mask] = label_val
-            label_val+=10
+            label_val += 10
 
-        # Create a labeled mask for all filaments
-        segment_info_reprojected = {}
         imgNew = np.rint(imgNew).astype(int)
+        print(f'Initial detection — max label: {label_val}, filaments: {label_val // 10}')
 
-        print(f'max label is: {label_val}, number of filaments: {label_val//10}')
+        segment_info_reprojected = {}
+        skipped = 0
 
-        # Extract coordinates for each label
         for lab in range(3, label_val + 1, 10):
-            white_mask = (imgNew >= lab -1) & (imgNew <= lab + 1)
+            white_mask = (imgNew >= lab - 1) & (imgNew <= lab + 1)
             if not np.any(white_mask):
-                continue 
-            coords = np.argwhere(white_mask)
-            img_skel = skeletonize(white_mask.astype(bool))
-            numpix = len(np.argwhere(img_skel)) #determine length from skeletonized filament
-            coords_list = [(int(x), int(y)) for y, x in coords]
-            region = self.getRegion(white_mask, data_new)
-            segment_info_reprojected[lab] = (coords_list, numpix, region, lab)
+                continue
 
-        print('Dictionary reprojected.')
-        print(np.max(segment_info_reprojected.keys()))
+            if np.sum(white_mask) < min_area * 2:
+                skipped += 1
+                continue
 
-        #debugging
-        base = Path(r"C:/Users/jhoffm72/Documents/FilPHANGS/PropertyTestData")
-        out_path = base / f"{self.FitsFile}_imgNewForFilDict.fits"
-        hdu = fits.PrimaryHDU(imgNew, header=self.BlockHeader)
-        hdu.writeto(out_path, overwrite=True)
+            quick_skel = skeletonize(white_mask.astype(bool))
+            if np.sum(quick_skel) < min_skel_length:
+                skipped += 1
+                continue
 
+            chopped_float = self.removeJunctions(white_mask).astype(float)
+
+            try:
+                seg_map    = detect_sources(chopped_float, threshold=0.5, npixels=min_area)
+                sub_labels = seg_map.labels
+                seg_data   = seg_map.data
+            except Exception:
+                skipped += 1
+                continue
+
+            for sub_lab in sub_labels:
+                seg_mask = seg_data == sub_lab
+                if not np.any(seg_mask):
+                    continue
+                img_skel = skeletonize(seg_mask.astype(bool))
+                numpix   = int(np.sum(img_skel))
+                if numpix < min_skel_length:
+                    continue
+                coords_list = [(int(x), int(y)) for y, x in np.argwhere(seg_mask)]
+                region = self.getRegion(seg_mask, data_new)
+                segment_info_reprojected[label_val] = (coords_list, numpix, region, label_val)
+                imgNew[seg_mask] = label_val
+                label_val += 10
+
+        print(f'After junction removal — {len(segment_info_reprojected)} segments kept, {skipped} skipped')
+
+        color_map_rgb = np.zeros((*imgNew.shape, 3), dtype=np.uint8)
+        rng = np.random.default_rng()
+        for lab in range(3, label_val + 1, 10):
+            mask = (imgNew >= lab - 1) & (imgNew <= lab + 1)
+            if np.any(mask):
+                color_map_rgb[mask] = rng.integers(0, 255, size=3)
+
+        base = Path(r"C:/Users/jhoffm72/Documents/FilPHANGS")
+        png_path = base / f"{self.FitsFile}_filamentColorMap.png"
+        Image.fromarray(color_map_rgb, mode='RGB').save(png_path)
+        print(f'Color map saved to: {png_path}')
 
         return segment_info_reprojected, Scale
 
@@ -1352,16 +1439,16 @@ class FilamentMap:
         model = globalfactor * model
 
         if(write_fits):
-            out_path = Path(f"{self.BaseDir}/{self.Label}/SyntheticMap/{self.FitsFile}_SyntheticMap.fits")
+            out_path = Path(f"{self.BaseDir}/{self.Label}/SyntheticMap/{self.FitsFile}_SyntheticMap_{tag}.fits")
             hdu = fits.PrimaryHDU(model, header=header)
             hdu.writeto(out_path, overwrite=True)
 
 
         #debugging
-        base = Path(r"C:/Users/jhoffm72/Documents/FilPHANGS/PropertyTestData")
-        out_path = base / f"{self.FitsFile}_PSFSyntheticModel.fits"
-        hdu = fits.PrimaryHDU(model, header=self.BlockHeader)
-        hdu.writeto(out_path, overwrite=True)
+        # base = Path(r"C:/Users/jhoffm72/Documents/FilPHANGS/PropertyTestData")
+        # out_path = base / f"{self.FitsFile}_PSFSyntheticModel.fits"
+        # hdu = fits.PrimaryHDU(model, header=self.BlockHeader)
+        # hdu.writeto(out_path, overwrite=True)
 
 
         return model, tag, globalfactor, phot
@@ -1439,10 +1526,10 @@ class FilamentMap:
 
 
         #debugging
-        base = Path(r"C:/Users/jhoffm72/Documents/FilPHANGS/PropertyTestData")
-        out_path = base / f"{self.FitsFile}_MolecularMassMap.fits"
-        hdu = fits.PrimaryHDU(Molecular_Mass, header=self.BlockHeader)
-        hdu.writeto(out_path, overwrite=True)
+        # base = Path(r"C:/Users/jhoffm72/Documents/FilPHANGS/PropertyTestData")
+        # out_path = base / f"{self.FitsFile}_MolecularMassMap.fits"
+        # hdu = fits.PrimaryHDU(Molecular_Mass, header=self.BlockHeader)
+        # hdu.writeto(out_path, overwrite=True)
 
         return Molecular_Mass
 
@@ -1516,12 +1603,12 @@ class FilamentMap:
 
 
         #debugging
-        base = Path(r"C:/Users/jhoffm72/Documents/FilPHANGS/PropertyTestData")
-        csv_path = base / f"{self.FitsFile}_CSVData_{tag}.csv"
-        csv_path.parent.mkdir(parents=True, exist_ok=True)  # make sure dir exists
-        if csv_path.exists():
-            csv_path.unlink()  # delete existing file first
-        df.to_csv(csv_path, index=False)
+        # base = Path(r"C:/Users/jhoffm72/Documents/FilPHANGS/PropertyTestData")
+        # csv_path = base / f"{self.FitsFile}_CSVData_{tag}.csv"
+        # csv_path.parent.mkdir(parents=True, exist_ok=True)  # make sure dir exists
+        # if csv_path.exists():
+        #     csv_path.unlink()  # delete existing file first
+        # df.to_csv(csv_path, index=False)
 
 
     def flux_toCo_21(self, I_F770W_16pc):
@@ -1606,10 +1693,10 @@ class FilamentMap:
         coords_data = self.Composite
 
         #debugging
-        base = Path(r"C:/Users/jhoffm72/Documents/FilPHANGS/PropertyTestData")
-        out_path = base / f"{self.FitsFile}_OriginalFilCenters.fits"
-        hdu = fits.PrimaryHDU(coords_data, header=self.BlockHeader)
-        hdu.writeto(out_path, overwrite=True)
+        # base = Path(r"C:/Users/jhoffm72/Documents/FilPHANGS/PropertyTestData")
+        # out_path = base / f"{self.FitsFile}_OriginalFilCenters.fits"
+        # hdu = fits.PrimaryHDU(coords_data, header=self.BlockHeader)
+        # hdu.writeto(out_path, overwrite=True)
 
         #Apply blocking to speed up PSF fitting
         if self.BlockFactor != 0:
@@ -1650,10 +1737,10 @@ class FilamentMap:
         coords_data = self.Composite
 
         #debugging
-        base = Path(r"C:/Users/jhoffm72/Documents/FilPHANGS/PropertyTestData")
-        out_path = base / f"{self.FitsFile}_OriginalFilCenters.fits"
-        hdu = fits.PrimaryHDU(coords_data, header=self.BlockHeader)
-        hdu.writeto(out_path, overwrite=True)
+        # base = Path(r"C:/Users/jhoffm72/Documents/FilPHANGS/PropertyTestData")
+        # out_path = base / f"{self.FitsFile}_OriginalFilCenters.fits"
+        # hdu = fits.PrimaryHDU(coords_data, header=self.BlockHeader)
+        # hdu.writeto(out_path, overwrite=True)
 
         #Apply blocking to speed up PSF fitting
         if self.BlockFactor != 0:
@@ -1670,7 +1757,7 @@ class FilamentMap:
             rep_centers[rep_centers > 0] = 1
             #Create a filament dictionary 
             segment_info_reprojected, Scale = self.createFilamentDictionary(rep_centers, use_Regions, min_scale) 
-            self.extractProperties(model,  rep_centers, phot, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale, globalfactor)
+            # self.extractProperties(model,  rep_centers, phot, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale, globalfactor) #Uncomment!
 
     def runImageLSE(self, data, coords_data, header, min_scale, write_fits):
 
@@ -1713,10 +1800,10 @@ class FilamentMap:
             hdu.writeto(out_path, overwrite=True)
 
         #debugging
-        base = Path(r"C:/Users/jhoffm72/Documents/FilPHANGS/PropertyTestData")
-        out_path = base / f"{self.FitsFile}_UniformScaleSyntheticModel.fits"
-        hdu = fits.PrimaryHDU(model, header=self.BlockHeader)
-        hdu.writeto(out_path, overwrite=True)
+        # base = Path(r"C:/Users/jhoffm72/Documents/FilPHANGS/PropertyTestData")
+        # out_path = base / f"{self.FitsFile}_UniformScaleSyntheticModel.fits"
+        # hdu = fits.PrimaryHDU(model, header=self.BlockHeader)
+        # hdu.writeto(out_path, overwrite=True)
 
         return model, tag, globalfactor, phot
 
