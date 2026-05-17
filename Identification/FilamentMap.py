@@ -880,6 +880,7 @@ class FilamentMap:
         plt.tight_layout()
         if write_fig:
             plt.savefig(f"{self.BaseDir}/Figures/ProbIntensityPlot_{self.Label}_{self.Scale}_{use_orig_img}.png")
+        plt.close()
 
 
 
@@ -932,12 +933,7 @@ class FilamentMap:
         - skelComposite (float): Thresholded data
         """
                 
-        #threshold
-        ProbabilityThresh = np.max(self.Composite)*probability_threshold
-        ret, threshComposite = cv2.threshold(self.Composite, ProbabilityThresh, 255, cv2.THRESH_BINARY)
-
-        #threshold
-        ProbabilityThresh = np.max(self.Composite)*probability_threshold
+        ProbabilityThresh = np.max(self.Composite) * probability_threshold
         ret, threshComposite = cv2.threshold(self.Composite, ProbabilityThresh, 255, cv2.THRESH_BINARY)
 
         #skeltonize
@@ -1090,18 +1086,17 @@ class FilamentMap:
         # Calculate lengths (perimeter) of each curve
         lengths = [region.perimeter for region in regions]
 
-        #convert to parcecs
         lengths = [l * self.Scalepix for l in lengths]
 
         # Plot histogram
         plt.figure(figsize=(8, 6))
         plt.hist(lengths, bins=20, color='blue', edgecolor='black')
         plt.title(f'Filament Length Histogram using prob_threshold {probability_threshold} for {self.Label} at {self.Scale}')
-        plt.xlabel('Length (parcecs)')
+        plt.xlabel('Length (parsecs)')
         plt.ylabel('Frequency')
         if write_fig:
             plt.savefig(Path(f"{self.BaseDir}/Figures/FilamentLengthHistogram_{self.Label}_{self.Scale}.png"))
-
+        plt.close()
 
 
     def getNoiseLevelsHistogram(self, noise_min = 10**-2, write_fig = True):
@@ -1125,7 +1120,7 @@ class FilamentMap:
         plt.ylabel('Frequency')
         if write_fig:
             plt.savefig(Path(f"{self.BaseDir}/Figures/NoiseLevelHistogram_{self.Label}_{self.Scale}.png"))
-
+        plt.close()
 
 
     def reprojectWrapper(self, inData, inHeader, OutputHeader, OutputData):

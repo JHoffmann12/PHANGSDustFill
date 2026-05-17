@@ -73,11 +73,12 @@ def removeJunctions(junctions, img, dot_size):
     # Make a mask of the junctions to be removed
     mask = np.ones_like(img, dtype=bool)
     for x, y in junctions:
+        x, y = int(x), int(y)
         x0 = max(0, x - dot_size)
         y0 = max(0, y - dot_size)
         x1 = min(mask.shape[1], x + dot_size)
         y1 = min(mask.shape[0], y + dot_size)
-        mask[y0:y1, x0:x1] = False  # Mask out region
+        mask[y0:y1, x0:x1] = False
     
     # Convert back to NumPy array for returning
     return img * mask
