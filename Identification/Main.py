@@ -49,7 +49,10 @@ if __name__ == "__main__":
     dynamic_alphaCO_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data\PHANGS_alphaCO_conversion_factor_maps")
 
     #SOAX params
-    min_snake_length_ss = 25
+    # min_aspect_ratio = length / width, where width = 16 pc / ScalePix.
+    # 8.2 yields min_snake_length_ss = 25 px at the reference ScalePix of 5.25 pc/px.
+    min_aspect_ratio    = 8.2
+    min_snake_length_ss = mainFuncs.getMinSnakeLengthFromAspectRatio(min_aspect_ratio)
     min_fg_int = 1638
 
     #Non SOAX params
@@ -110,7 +113,7 @@ if __name__ == "__main__":
                 filMap.runSoaxThreads(min_snake_length_ss, min_fg_int, batch_path) #Create 10 soax FITS files
                 filMap.createComposite(write_fits = False) #Combine all 10 Fits files
                 # filMap.getSyntheticFilamentMapApprox(min_scale = 2**min_power, alphaCO_tag = 'SL24', use_dynamic_alphaCO = dynamic_alphaCO_path, use_Regions = region_dir_path, extract_Properties = False, write_fits = True) # Creates a synthetic map of all filaments at a single scale from the blurred probability_map. set_as_composite = True. 
-                filMap.getSyntheticFilamentMapExact(min_scale = 2**min_power, alphaCO_tag = 'SL24', use_dynamic_alphaCO = dynamic_alphaCO_path, use_Regions = region_dir_path, extract_Properties = True, write_fits = True) # Creates a synthetic map of all filaments at a single scale from the blurred probability_map. set_as_composite = True. 
+                filMap.getSyntheticFilamentMapExact(min_scale = 2**min_power, alphaCO_tag = 'SL24', use_dynamic_alphaCO = dynamic_alphaCO_path, use_Regions = region_dir_path, extract_Properties = True, write_fits = True, min_aspect_ratio = min_aspect_ratio)
 
                 #Current status: reprojecting the skeletonized image is fucked, need to fix. 
 
@@ -137,4 +140,4 @@ if __name__ == "__main__":
     hours = int(elapsed_time // 3600)
     minutes = int((elapsed_time % 3600) // 60)
     seconds = int(elapsed_time % 60)
-    print(f'FilPHANGS took: {hours:02d}:{minutes:02d}:{seconds:02d} in total')
+    logger.info('FilPHANGS took: %02d:%02d:%02d total', hours, minutes, seconds)

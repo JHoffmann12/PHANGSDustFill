@@ -1295,7 +1295,7 @@ class FilamentMap:
         return chopped
 
 
-    def createFilamentDictionary(self, rep_centers, use_Regions, min_scale):
+    def createFilamentDictionary(self, rep_centers, use_Regions, min_scale, min_aspect_ratio):
         data_new = self.getRegionData(use_Regions)
         label_val = 3
         Scale = self._getScale(self.FitsFile)
@@ -1303,20 +1303,36 @@ class FilamentMap:
         Scale = float(Scale)
 
         if self.BlockFactor != 0:
-            min_area = int(8*(16/(self.BlockFactor*self.Scalepix))**2)
             imgNew = np.zeros_like(self.BlockData, dtype=float)
         else:
-            min_area = int(8*(16/self.Scalepix)**2)
             imgNew = np.zeros_like(self.OrigData, dtype=float)
 
-        # min_skel_length: minimum centerline length in pixels, set to 4× the resolution element
-        min_skel_length = int(4*(16/self.Scalepix))
-        logger.info("Computed min_area=%d, min_skel_length=%d for %s", min_area, min_skel_length, self.FitsFile)
+        # Base length from aspect ratio at the unblocked pixel scale. A conservative
+        # sqrt-blocking reduction (matching SOAX) is then applied, which causes the
+        # effective aspect ratio to increase at larger scales — this is acceptable.
+        #
+        # Scale  BF   min_skel (blocked px)   effective aspect ratio (physical)
+        # 16pc    0        25                         8.2   (= min_aspect_ratio)
+        # 32pc    2        19                        ~12.5
+        # 64pc    4        17                        ~22.3
+        # 128pc   8        14                        ~36.7
+        # 256pc  16         9                        ~47.2
+        # (values above assume Scalepix=5.25 pc/px and min_aspect_ratio=8.2)
+        base_length     = round(min_aspect_ratio * 16.0 / self.Scalepix)
+        min_skel_length = max(1, round(base_length - math.sqrt(self.BlockFactor) * 4))
+        block           = self.BlockFactor if self.BlockFactor != 0 else 1
+        effective_ar    = min_skel_length * block * self.Scalepix / 16.0
+        logger.info(
+            "BlockFactor=%d → base_length=%d px → min_skel_length=%d blocked-px "
+            "→ effective aspect ratio=%.1f for %s",
+            self.BlockFactor, base_length, min_skel_length, effective_ar, self.FitsFile,
+        )
 
-        # TODO: replace 20 with the physically-motivated min_area once threshold is validated
-        min_area = 20
-        segment_map  = detect_sources(rep_centers, threshold=0.5, npixels=min_area)
-        segm_deblend = deblend_sources(rep_centers, segment_map, npixels=min_area,
+        # _npix is a minimal connected-component grouping threshold for detect_sources.
+        # All real filtering is done by the skeleton length / aspect ratio check below.
+        _npix = 4
+        segment_map  = detect_sources(rep_centers, threshold=0.5, npixels=_npix)
+        segm_deblend = deblend_sources(rep_centers, segment_map, npixels=_npix,
                                     nlevels=32, contrast=0.001, progress_bar=False)
 
         for label in segm_deblend.labels:
@@ -1335,12 +1351,7 @@ class FilamentMap:
             if not np.any(white_mask):
                 continue
 
-            # Fast area pre-filter: skip blobs too small to yield a valid skeleton (avoids costly skeletonize)
-            if np.sum(white_mask) < min_area * 2:
-                skipped += 1
-                continue
-
-            # Pre-junction skeleton length check on the full blob
+            # Aspect ratio check: skeleton length must be ≥ min_aspect_ratio × filament width
             quick_skel = skeletonize(white_mask.astype(bool))
             if np.sum(quick_skel) < min_skel_length:
                 skipped += 1
@@ -1351,11 +1362,11 @@ class FilamentMap:
 
             try:
                 # Re-detect connected regions after junction removal; threshold=0.5 on binary {0,1} input
-                seg_map    = detect_sources(chopped_float, threshold=0.5, npixels=min_area)
+                seg_map    = detect_sources(chopped_float, threshold=0.5, npixels=_npix)
                 sub_labels = seg_map.labels
                 seg_data   = seg_map.data
             except Exception:
-                # detect_sources returns None when no regions remain → .labels raises AttributeError
+                # detect_sources returns None when no regions survive → .labels raises AttributeError
                 skipped += 1
                 continue
 
@@ -1365,6 +1376,7 @@ class FilamentMap:
                     continue
                 img_skel = skeletonize(seg_mask.astype(bool))
                 numpix   = int(np.sum(img_skel))
+                # Post-junction aspect ratio check on each sub-segment
                 if numpix < min_skel_length:
                     continue
                 coords_list = [(int(x), int(y)) for y, x in np.argwhere(seg_mask)]
@@ -1660,7 +1672,7 @@ class FilamentMap:
             self.convertToCSV(Scale, tag, LineDensityMass, SurfaceDensityMass, segment_info_reprojected) #line density calculated from placing all flux in filament center and 
             #surface density extracted fromc enter line of ysnthetic filament map.
 
-    def getSyntheticFilamentMapExact(self, min_scale, alphaCO_tag, use_dynamic_alphaCO = None, use_Regions = None, extract_Properties = True, write_fits = True):
+    def getSyntheticFilamentMapExact(self, min_scale, alphaCO_tag, use_dynamic_alphaCO = None, use_Regions = None, extract_Properties = True, write_fits = True, min_aspect_ratio = 8.2):
 
         """
         Use PSF fitting to create a synthetic image of only detected filaments. Then use this synthetic map to extract filament properties such as length, curvature, mass, line mass, surface density. 
@@ -1716,10 +1728,10 @@ class FilamentMap:
             # rep_centers, _ = reproject_exact((rep_centers , self.BlockHeader), self.OrigHeader, shape_out=self.OrigData.shape) #keep downsampled size
             rep_centers[rep_centers > 0] = 1
             #Create a filament dictionary 
-            segment_info_reprojected, Scale = self.createFilamentDictionary(rep_centers, use_Regions, min_scale) 
+            segment_info_reprojected, Scale = self.createFilamentDictionary(rep_centers, use_Regions, min_scale, min_aspect_ratio)
             self.extractProperties(model, rep_centers, phot, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale, globalfactor)
 
-    def getSyntheticFilamentMapApprox(self, min_scale, alphaCO_tag, use_dynamic_alphaCO = None, use_Regions = None, extract_Properties = True, write_fits = True):
+    def getSyntheticFilamentMapApprox(self, min_scale, alphaCO_tag, use_dynamic_alphaCO = None, use_Regions = None, extract_Properties = True, write_fits = True, min_aspect_ratio = 8.2):
 
         logger.info("Beginning LSE approximate synthetic map: %s", self.FitsFile)
         fits_path = os.path.join(self.BaseDir, self.Label, "CDD")
@@ -1753,7 +1765,7 @@ class FilamentMap:
             # rep_centers, _ = reproject_exact((rep_centers , self.BlockHeader), self.OrigHeader, shape_out=self.OrigData.shape) #keep downsampled size
             rep_centers[rep_centers > 0] = 1
             #Create a filament dictionary 
-            segment_info_reprojected, Scale = self.createFilamentDictionary(rep_centers, use_Regions, min_scale) 
+            segment_info_reprojected, Scale = self.createFilamentDictionary(rep_centers, use_Regions, min_scale, min_aspect_ratio)
             # self.extractProperties(model,  rep_centers, phot, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale, globalfactor) #Uncomment!
 
     def runImageLSE(self, data, coords_data, header, min_scale, write_fits):

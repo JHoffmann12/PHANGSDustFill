@@ -112,6 +112,33 @@ def getInfo(label, csv_path):
         return None
 
 
+def getMinSnakeLengthFromAspectRatio(min_aspect_ratio, ref_scale_pc=16.0, ref_scalepix=5.25):
+    """
+    Convert a minimum aspect ratio into a SOAX minimum snake length.
+
+    Filament width in pixels = Scale / ScalePix (16 pc / ScalePix at the minimum CDD scale).
+    min_snake_length = round(min_aspect_ratio * width).
+
+    The reference ScalePix of 5.25 pc/px is representative of the PHANGS F770W dataset at 16 pc.
+    With the default ratio of 8.2, this returns 25 px — matching the previous hardcoded value.
+
+    Parameters:
+    - min_aspect_ratio (float): desired minimum length-to-width ratio for a valid filament
+    - ref_scale_pc (float): minimum CDD scale in parsecs (default 16)
+    - ref_scalepix (float): reference parsecs-per-pixel at that scale (default 5.25)
+
+    Returns:
+    - min_snake_length_ss (int): minimum snake length in pixels for SOAX at the shortest scale
+    """
+    ref_width_pix = ref_scale_pc / ref_scalepix
+    min_snake_length_ss = round(min_aspect_ratio * ref_width_pix)
+    logger.info(
+        "min_aspect_ratio=%.2f → ref_width=%.2f px → min_snake_length_ss=%d",
+        min_aspect_ratio, ref_width_pix, min_snake_length_ss,
+    )
+    return min_snake_length_ss
+
+
 def setUpGalaxy(base_dir, label_folder_path,  label, distance_Mpc, res, pixscale, param_file_path, noise_min, flatten_perc, min_intensity, sSFR, Inclination): 
 
     """
