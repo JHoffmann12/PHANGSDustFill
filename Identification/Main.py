@@ -123,42 +123,27 @@ if __name__ == "__main__":
         Modified_Constrained_Diffusion.decompose(image_path, label_folder_path, base_dir, label, distance_Mpc, res, pixscale, min_power, max_power, Rem_sources)
 
         # Build a FilamentMap object for each decomposed scale
-        FilamentMapList = mainFuncs.setUpGalaxy(base_dir, label_folder_path, label, distance_Mpc, res, pixscale, param_file_path, noise_min, flatten_perc, min_intensity, sSFR, Inclination)
+        FilamentMapList = mainFuncs.setUpGalaxy(base_dir, label_folder_path, label, distance_Mpc, pixscale, param_file_path, noise_min, flatten_perc, min_intensity, sSFR, Inclination)
 
         for filMap in FilamentMapList:
 
             filMap.scaleBkgSubDivRMSMap(write_fits=False)
             filMap.runSoaxThreads(min_snake_length_ss, min_fg_int, batch_path)
             filMap.createComposite(write_fits=False)
+            rep_centers = filMap.processComposite(coords_runs = 10, min_confidence=0.1, min_overlap_fraction=0.1)
 
             # PSF-based synthetic map + property extraction (primary pipeline)
-            filMap.getSyntheticFilamentMapExact(
-                min_scale=2**min_power,
-                alphaCO_tag='SL24',
-                use_dynamic_alphaCO=dynamic_alphaCO_path,
-                use_Regions=region_dir_path,
-                extract_Properties=True,
-                write_fits=True,
-                min_aspect_ratio=min_aspect_ratio,
-            )
+            filMap.getSyntheticFilamentMapExact(min_scale=2**min_power, rep_centers=rep_centers, alphaCO_tag='SL24', use_dynamic_alphaCO=dynamic_alphaCO_path, use_Regions=region_dir_path, extract_Properties=True, write_fits=True, min_aspect_ratio=min_aspect_ratio)
 
             # LSE approximate synthetic map (faster, less accurate — uncomment to use instead)
-            # filMap.getSyntheticFilamentMapApprox(
-            #     min_scale=2**min_power, alphaCO_tag='SL24',
-            #     use_dynamic_alphaCO=dynamic_alphaCO_path, use_Regions=region_dir_path,
-            #     extract_Properties=False, write_fits=True, min_aspect_ratio=min_aspect_ratio,
-            # )
+            # filMap.getSyntheticFilamentMapApprox(min_scale=2**min_power, rep_centers=rep_centers, alphaCO_tag='SL24', use_dynamic_alphaCO=dynamic_alphaCO_path, use_Regions=region_dir_path, extract_Properties=False, write_fits=True, min_aspect_ratio=min_aspect_ratio)
 
             # Legacy SOAX-composite processing (uncomment to use instead of PSF pipeline)
-            # filMap.blurComposite(set_blur_as_prob=True, write_fits=True)
-            # skelData = filMap.applyProbabilityThresholdAndSkeletonize(probability_threshold=0.3, min_len_pix=10, write_fits=True)
-            # filMap.removeJunctions(skelData, probability_threshold=0.3, min_len_pix=10, set_as_composite=True, write_fits=True)
 
             # Diagnostic plots (uncomment as needed)
             # mainFuncs.CreateSNRPlot(FilamentMapList, base_dir, percentile=99, write=True)
             # filMap.getProbIntensityPlot(use_orig_img=False, write_fig=True)
             # filMap.getNoiseLevelsHistogram(noise_min=noise_min, write_fig=True)
-            # filMap.getFilamentLengthHistogram(probability_threshold=0.3, write_fig=True)
 
     # Display Time information
     end = time.time()

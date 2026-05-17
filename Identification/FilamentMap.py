@@ -61,22 +61,29 @@ logger = logging.getLogger(__name__)
 
 
 class FilamentMap:
+    """Represents one scale-decomposed image and drives all stages of filament identification.
 
-    def __init__(self,  scalepix, base_dir, label_folder_path, fits_file, label, param_file_path, flatten_perc, min_intensity, sSFR, Inclination):
+    Each instance wraps a single CDD FITS file and its corresponding original image, and
+    exposes methods for background subtraction, SOAX execution, composite construction,
+    PSF-based synthetic map generation, and property extraction.
+    """
 
-        '''
-        Filament Map Constructor.
+    def __init__(self, scalepix, base_dir, label_folder_path, fits_file, label, param_file_path, flatten_perc, min_intensity, sSFR, Inclination):
+        """Initialise a FilamentMap for one scale-decomposed image.
 
-        Parameters:
-        - scalepix (float): parcecs per pixel
-        - base_dir (str): path to FilPHANGS base directory
-        - label_folder_path (str): path to image subfolder
-        - fits_file (str): path to fits file in CDD folder
-        - label (str): Image label
-        - param_file_path (str): path to the soax parameter file
-        - flatten_perc (float): percentage for arctan transform
-
-        '''
+        Parameters
+        ----------
+        - scalepix (float): Physical pixel scale in parsecs per pixel.
+        - base_dir (str or Path): Root FilPHANGS output directory.
+        - label_folder_path (str or Path): Per-galaxy output subdirectory.
+        - fits_file (str): Filename of the CDD FITS file (in the CDD/ subfolder).
+        - label (str): Galaxy label, e.g. 'NGC0628_F770W'.
+        - param_file_path (str or Path): Path to the SOAX parameter text file.
+        - flatten_perc (float): Percentile for the arctan intensity rescaling before SOAX.
+        - min_intensity (float): Original-image pixels below this value are zeroed out.
+        - sSFR (float): Specific star formation rate used in CO flux conversion.
+        - Inclination (float): Galaxy inclination in degrees used in CO flux conversion.
+        """
 
         CDD_path = os.path.join(label_folder_path, "CDD")
         fits_path = os.path.join(CDD_path, fits_file)
@@ -139,17 +146,24 @@ class FilamentMap:
 
 
     def preprocessImage(self, image, fits_file, skip_flatten=False, flatten_percent=None):
-        
-        '''
-        Preprocess and flatten the image before running the masking routine.
+        """Apply arctan intensity rescaling (or histogram equalisation for extinction maps) before SOAX.
 
-        Parameters:
-        - skip_flatten (bool): optional. Skip the flattening step and use the original image to construct the mask. Default is False.
-        - flatten_percent (int) : optional. The percentile of the data (0-100) to set the normalization of the arctan transform. By default, 
-            a log-normal distribution is fit and the threshold is set to :math:`\mu + 2\sigma`. If the data contains regions of a much higher 
-            intensity than the mean, it is recommended this be set >95 percentile.
+        For standard images the threshold is set at flatten_percent of the pixel distribution, or
+        at mu + 2*sigma of a log-normal fit if flatten_percent is None. Extinction images receive
+        a local histogram equalisation instead.
 
-        '''
+        Parameters
+        ----------
+        - image (ndarray): Raw 2D image array.
+        - fits_file (str): Filename used to detect extinction images (checked for 'Extinction').
+        - skip_flatten (bool): If True, return the image unchanged.
+        - flatten_percent (float or None): Percentile (0–100) for the arctan knee; None uses
+          a log-normal fit.
+
+        Returns
+        -------
+        - processed_img (ndarray): Rescaled image ready for SOAX ingestion.
+        """
 
         if 'Extinction' in fits_file: 
             print('Equalizing image')
@@ -197,6 +211,12 @@ class FilamentMap:
         return processed_img
             
     def setBlockFactor(self, bf):
+        """Override the automatically determined block factor.
+
+        Parameters
+        ----------
+        - bf (int): Downsampling factor to use in place of the computed value.
+        """
         self.BlockFactor = bf
     
 
@@ -804,12 +824,19 @@ class FilamentMap:
 
 
 
-    def setIntensityMap(self, orig = True):
-        if(orig):
-            self.IntensityMap[self.Composite !=0] = 255*self.OrigData[self.Composite!=0]
-        else: 
+    def setIntensityMap(self, orig=True):
+        """Populate IntensityMap with pixel intensities at filament locations.
+
+        Parameters
+        ----------
+        - orig (bool): If True, samples from the original CDD image scaled to [0, 255].
+          If False, samples from the background-subtracted SNR image.
+        """
+        if orig:
+            self.IntensityMap[self.Composite != 0] = 255 * self.OrigData[self.Composite != 0]
+        else:
             temp = self.reprojectWrapper(self.ProbabilityMap, self.OrigHeader, self.BlockHeader, self.BlockData)
-            self.IntensityMap[temp !=0] = self.BkgSubDivRMSMap[temp!=0]
+            self.IntensityMap[temp != 0] = self.BkgSubDivRMSMap[temp != 0]
 
 
 
@@ -884,114 +911,6 @@ class FilamentMap:
 
 
 
-    def blurComposite(self, set_blur_as_prob = True, write_fits = True):
-
-        """
-        blur the originally dimesnioned composite image so it is not merely a stack of lines. To blur the reproected/dpwnsampled composite, adjust scalepix. 
-
-        Parameters:
-        - set_blur_as_prob (bool): set the blurred composite to be the probability map. 
-        - write_fits (bool): Save the blurred composite as a fits file
-        """
-            
-        struct_width = self.Scale.replace('pc',"")
-        struct_width = float(struct_width)
-
-        # Convert structure width from parsecs to pixels
-        structure_width_pixels = struct_width / self.Scalepix
-        
-        # Calculate sigma for Gaussian convolution
-        sigma = structure_width_pixels / 2.355  # FWHM = 2.355 * sigma -> sigma = FWHM / 2.355
-
-        # Apply Gaussian blur
-        blurred_image = gaussian_filter(self.Composite, sigma=sigma)
-
-        self.Composite = blurred_image
-        if(set_blur_as_prob):
-            self.ProbabilityMap = blurred_image
-
-        if(write_fits):
-            output_directory = Path(f"{self.BaseDir}/{self.Label}/Composites")
-            output_name = Path(f"{self.FitsFile}_CompositeBlur")
-            output_fits_path = os.path.join(output_directory, str(output_name) + '.fits')
-            hdu = fits.PrimaryHDU(data=blurred_image, header=self.OrigHeader)
-            hdu.writeto(output_fits_path, overwrite=True)
-
-
-
-    def applyProbabilityThresholdAndSkeletonize(self, probability_threshold, min_len_pix, write_fits = True):
-
-        """
-        Given the blurred composite, threshold the image. 
-
-        Parameters:
-        - probability_threshold (float): Minimum percentage between 0 and 1 that a pixel must have in order for it to be considered "real". 
-        - min_len_pix (int): minimum area in pixels a filament must occupy. 
-        - write_fits (bool): Save the cleaned composite as a fits file
-
-        Returns: 
-        - skelComposite (float): Thresholded data
-        """
-                
-        ProbabilityThresh = np.max(self.Composite) * probability_threshold
-        ret, threshComposite = cv2.threshold(self.Composite, ProbabilityThresh, 255, cv2.THRESH_BINARY)
-
-        #skeltonize
-        skelComposite = skeletonize(threshComposite)
-        skelComposite = skelComposite.astype(np.uint8)
-
-        # #remove small filaments
-        # img = np.array(skelComposite)
-        # labels, stats, num_labels = AF.identify_connected_components(np.array(skelComposite))
-        # small_areas = AF.sort_label_id(num_labels, stats, min_len_pix)
-        # for label_id in small_areas:
-
-        #     # Extract the bounding box coordinates
-        #     left = stats[label_id, cv2.CC_STAT_LEFT]
-        #     top = stats[label_id, cv2.CC_STAT_TOP]
-        #     width = stats[label_id, cv2.CC_STAT_WIDTH]
-        #     height = stats[label_id, cv2.CC_STAT_HEIGHT]
-
-        #     for x in range(width):
-        #         for y in range(height):
-        #             img[top:top+height, left:left+width] = 0
-
-        # skelComposite = img.astype(np.uint8)
-
-
-        # Identify connected components
-        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
-            np.uint8(skelComposite), connectivity=8
-        )
-
-        img = np.copy(skelComposite)
-
-        for label_id in range(1, num_labels):  # skip background (0)
-            # Extract component mask
-            component_mask = (labels == label_id)
-
-            # Skeletonize the component to measure its length
-            skeleton = skeletonize(component_mask)
-
-            # Compute filament length (number of skeleton pixels)
-            filament_length = np.sum(skeleton)
-
-            # Remove component if it's shorter than threshold
-            if filament_length < min_len_pix:
-                img[component_mask] = 0
-
-        skelComposite = img.astype(np.uint8)
-
-        if write_fits:   
-            output_directory = Path(f"{self.BaseDir}/{self.Label}/Composites")
-            output_name = Path(f"{self.FitsFile}_Composite_{probability_threshold}")
-            output_fits_path = os.path.join(output_directory, str(output_name)  + '.fits')
-            hdu = fits.PrimaryHDU(data=skelComposite, header=self.OrigHeader)
-            hdu.writeto(output_fits_path, overwrite=True)
-
-        
-        return skelComposite
-
     def removeJunctions(self, skelComposite, probability_threshold, min_len_pix, set_as_composite= False, write_fits = True):
 
         """
@@ -1059,45 +978,17 @@ class FilamentMap:
     
 
     def getLabel(self):
-        return self.Label  
-             
+        """Return the galaxy label string, e.g. 'NGC0628_F770W'."""
+        return self.Label
+
     def getBkgSubDivRMSMap(self):
-        return self.BkgSubDivRMSMap  
-    
+        """Return the background-subtracted, noise-divided SNR map."""
+        return self.BkgSubDivRMSMap
+
     def getScale(self):
-        return self.Scale  
+        """Return the CDD scale string for this image, e.g. '32pc'."""
+        return self.Scale
                                 
-
-    def getFilamentLengthHistogram(self, probability_threshold, write_fig = True):
-
-        """
-        Create a histogram of filament lengths in parsecs. 
-        NOT RELIABLE. 
-
-        Parameters:
-        - probability_threshold (float): Used here in the plot name. Changing this parameter will change filament lengths. 
-        - write_fig (bool): Save the histogram
-        """
-
-        # Label connected components
-        labeled_image = measure.label(self.Composite, connectivity=2)
-        regions = measure.regionprops(labeled_image)
-
-        # Calculate lengths (perimeter) of each curve
-        lengths = [region.perimeter for region in regions]
-
-        lengths = [l * self.Scalepix for l in lengths]
-
-        # Plot histogram
-        plt.figure(figsize=(8, 6))
-        plt.hist(lengths, bins=20, color='blue', edgecolor='black')
-        plt.title(f'Filament Length Histogram using prob_threshold {probability_threshold} for {self.Label} at {self.Scale}')
-        plt.xlabel('Length (parsecs)')
-        plt.ylabel('Frequency')
-        if write_fig:
-            plt.savefig(Path(f"{self.BaseDir}/Figures/FilamentLengthHistogram_{self.Label}_{self.Scale}.png"))
-        plt.close()
-
 
     def getNoiseLevelsHistogram(self, noise_min = 10**-2, write_fig = True):
 
@@ -1204,38 +1095,166 @@ class FilamentMap:
         # print(f"success, dominant region is: {dominant_region}")
         return int(dominant_region)
 
-    def processFilamentCenters(self, coords_data):
+    # def processFilamentCenters(self, coords_data):
+    #     kernel_size = 3
+    #     kernel = np.ones((kernel_size, kernel_size), np.uint8)
+    #     dilated_image = cv2.morphologyEx(coords_data, cv2.MORPH_CLOSE, kernel)
+    #     dilated_image = skeletonize(dilated_image.astype(bool))
+    #     coords_data = dilated_image.astype(np.uint8)
+
+    #     #debugging
+    #     # base = Path(r"C:/Users/jhoffm72/Documents/FilPHANGS/PropertyTestData")
+    #     # out_path = base / f"{self.FitsFile}_filCentersDilated.fits"
+    #     # hdu = fits.PrimaryHDU(coords_data, header=self.BlockHeader)
+    #     # hdu.writeto(out_path, overwrite=True)
+
+
+    #     #Step 4: Remove junctions
+    #     fil_centers = copy.deepcopy(coords_data)
+    #     junctions = AF.getSkeletonIntersection(np.array(fil_centers*255))
+    #     IntersectsRemoved = AF.removeJunctions(junctions, fil_centers, dot_size = 1) #check intersects removed
+    #     IntersectsRemoved[IntersectsRemoved > 0] = 1
+    #     IntersectsRemoved[IntersectsRemoved < 0] = 0
+    #     fil_centers = IntersectsRemoved
+
+    #     #debugging
+    #     # base = Path(r"C:/Users/jhoffm72/Documents/FilPHANGS/PropertyTestData")
+    #     # out_path = base / f"{self.FitsFile}_filCentersProcessed.fits"
+    #     # hdu = fits.PrimaryHDU(fil_centers, header=self.BlockHeader)
+    #     # hdu.writeto(out_path, overwrite=True)
+        
+    #     return fil_centers, coords_data        
+
+    def processFilamentCenters(self, coords_runs, min_confidence=0.4, min_overlap_fraction=0.1):
+        """Merge multiple SOAX runs into a single junction-free skeleton using confidence voting.
+
+        Combines binary images from all runs, morphologically closes gaps, skeletonizes, removes
+        junctions, then filters to retain only segments that appear in at least min_confidence
+        fraction of runs.
+
+        Parameters
+        ----------
+        - coords_runs (list of ndarray): List of binary arrays, one per SOAX run.
+        - min_confidence (float): Fraction of runs a segment must appear in to survive (0–1).
+        - min_overlap_fraction (float): Minimum overlap fraction for a run to count as a vote.
+
+        Returns
+        -------
+        - filtered (ndarray): Binary skeleton with low-confidence segments removed.
+        """
+        import copy
+        import cv2
+        import numpy as np
+
+        from scipy import ndimage
+        from skimage.morphology import skeletonize
+
+        n_runs = len(coords_runs)
+
+        # ---------------------------------------------------
+        # Combine runs into one binary image
+        # ---------------------------------------------------
+
+        coords_data = np.sum(coords_runs, axis=0)
+        coords_data = (coords_data > 0).astype(np.uint8)
+
+        # ---------------------------------------------------
+        # Morphological reconciliation
+        # ---------------------------------------------------
+
         kernel_size = 3
         kernel = np.ones((kernel_size, kernel_size), np.uint8)
+
         dilated_image = cv2.morphologyEx(coords_data, cv2.MORPH_CLOSE, kernel)
         dilated_image = skeletonize(dilated_image.astype(bool))
         coords_data = dilated_image.astype(np.uint8)
 
-        #debugging
-        # base = Path(r"C:/Users/jhoffm72/Documents/FilPHANGS/PropertyTestData")
-        # out_path = base / f"{self.FitsFile}_filCentersDilated.fits"
-        # hdu = fits.PrimaryHDU(coords_data, header=self.BlockHeader)
-        # hdu.writeto(out_path, overwrite=True)
+        # ---------------------------------------------------
+        # Remove junctions
+        # ---------------------------------------------------
 
-
-        #Step 4: Remove junctions
         fil_centers = copy.deepcopy(coords_data)
-        junctions = AF.getSkeletonIntersection(np.array(fil_centers*255))
-        IntersectsRemoved = AF.removeJunctions(junctions, fil_centers, dot_size = 1) #check intersects removed
+        junctions = AF.getSkeletonIntersection(np.array(fil_centers * 255))
+        IntersectsRemoved = AF.removeJunctions(junctions, fil_centers, dot_size=1)
+
         IntersectsRemoved[IntersectsRemoved > 0] = 1
         IntersectsRemoved[IntersectsRemoved < 0] = 0
-        fil_centers = IntersectsRemoved
 
-        #debugging
-        # base = Path(r"C:/Users/jhoffm72/Documents/FilPHANGS/PropertyTestData")
-        # out_path = base / f"{self.FitsFile}_filCentersProcessed.fits"
-        # hdu = fits.PrimaryHDU(fil_centers, header=self.BlockHeader)
-        # hdu.writeto(out_path, overwrite=True)
-        
-        return fil_centers, coords_data        
+        fil_centers = IntersectsRemoved.astype(np.uint8)
+
+        # ---------------------------------------------------
+        # EARLY EXIT:
+        # if min_confidence <= 1/n_runs then every filament
+        # automatically passes the vote threshold
+        # ---------------------------------------------------
+
+        min_votes_required = int(np.ceil(min_confidence * n_runs))
+
+        if min_votes_required <= 1:
+            return fil_centers, coords_data
+
+        # ---------------------------------------------------
+        # Label final filaments
+        # ---------------------------------------------------
+
+        labels, n_labels = ndimage.label(fil_centers)
+
+        # ---------------------------------------------------
+        # Dilate original runs slightly
+        # ---------------------------------------------------
+
+        support_kernel = np.ones((3,3), np.uint8)
+
+        dilated_runs = [cv2.dilate(run.astype(np.uint8), support_kernel, iterations=1) for run in coords_runs]
+
+        # ---------------------------------------------------
+        # Filter by confidence
+        # ---------------------------------------------------
+
+        filtered = np.zeros_like(fil_centers)
+
+        for filament_id in range(1, n_labels + 1):
+
+            filament_mask = (labels == filament_id)
+
+            filament_size = filament_mask.sum()
+
+            if filament_size == 0:
+                continue
+
+            votes = 0
+
+            for run in dilated_runs:
+
+                overlap = np.logical_and(filament_mask, run)
+                overlap_fraction = overlap.sum() / filament_size
+
+                # meaningful contribution
+                if overlap_fraction >= min_overlap_fraction:
+
+                    votes += 1
+
+                    # early success exit
+                    if votes >= min_votes_required:
+                        filtered[filament_mask] = 1
+                        break
+
+        self.Composite = coords_data 
+        return filtered
 
 
     def removeJunctions(self, binary_mask, dot_size=1):
+        """Remove junction pixels from a binary filament mask by erasing small patches at branch points.
+
+        Parameters
+        ----------
+        - binary_mask (ndarray): 2D binary image containing one or more filament blobs.
+        - dot_size (int): Half-width in pixels of the square erased around each junction.
+
+        Returns
+        -------
+        - chopped (ndarray): Float copy of binary_mask with junction regions zeroed out.
+        """
         skel = skeletonize(binary_mask.astype(bool))
 
         if not np.any(skel):
@@ -1291,6 +1310,24 @@ class FilamentMap:
 
 
     def createFilamentDictionary(self, rep_centers, use_Regions, min_scale, min_aspect_ratio):
+        """Segment the junction-free skeleton into individual filaments and apply aspect-ratio filtering.
+
+        Runs photutils source detection on the binary skeleton, removes junctions from each blob,
+        then keeps only sub-segments whose skeleton length exceeds the aspect-ratio threshold.
+
+        Parameters
+        ----------
+        - rep_centers (ndarray): Binary skeleton image in blocked pixel coordinates.
+        - use_Regions (str or Path): Directory containing region mask FITS files, or None.
+        - min_scale (float): Minimum CDD scale in parsecs (used for scale lookup).
+        - min_aspect_ratio (float): Minimum filament length-to-width ratio; width = 16 pc / ScalePix.
+
+        Returns
+        -------
+        - segment_info_reprojected (dict): Maps label_val to (coords_list, numpix, region, label_val)
+          for each surviving filament segment.
+        - Scale (float): CDD scale for this image in parsecs.
+        """
         data_new = self.getRegionData(use_Regions)
         label_val = 3
         Scale = self._getScale(self.FitsFile)
@@ -1398,7 +1435,29 @@ class FilamentMap:
 
 
     def runPSF(self, data, coords_data, header, write_fits):
+        """Fit a circular Gaussian PSF to each skeleton pixel and build a synthetic filament image.
 
+        Uses photutils PSFPhotometry with a CircularGaussianPRF at the 16 pc resolution element.
+        Initial flux at each skeleton pixel is set to data[y,x] × alpha, where alpha is the
+        LSE-optimal linear scale factor between the masked CDD image and the data — the same
+        estimate used by the approximate method, giving the optimizer a physically informed
+        starting point. Falls back from grouped to ungrouped fitting if a MemoryError occurs.
+        The returned model is further rescaled so its median ratio to the data matches.
+
+        Parameters
+        ----------
+        - data (ndarray): CDD image at blocked resolution used as the photometric reference.
+        - coords_data (ndarray): Binary skeleton image marking filament centerline pixels.
+        - header (astropy Header): FITS header of the CDD image.
+        - write_fits (bool): Whether to save the synthetic map to SyntheticMap/.
+
+        Returns
+        -------
+        - model (ndarray): Rescaled synthetic image in blocked pixel coordinates.
+        - tag (str): 'Grouped' or 'NotGrouped', indicating which fitting mode was used.
+        - globalfactor (float): Median rescaling factor applied to the raw PSF model.
+        - phot (astropy Table): PSFPhotometry result table with fitted positions and fluxes.
+        """
         # fwhmval = int(Scale/self.Scalepix)
         fwhmval = int(16/self.Scalepix) #KEEP AN EYE HERE. 
 
@@ -1411,13 +1470,18 @@ class FilamentMap:
         psf_model.fwhm.max = fwhmval * 2.0  # do not allow the fwhm to encroach into next larger single scale interval
         psf_model.fixed
 
-        # step 7: Apply PSF to create model
-        net_scaling_factor = 3.2728865403756338
+        # Initialise PSF flux from the LSE approximate solution: find the optimal linear scale
+        # alpha that minimises ||alpha * (data * skel) - data||², then use data[y,x] * alpha
+        # as a per-pixel starting point rather than a single hardcoded constant.
         y_coords, x_coords = np.where(coords_data > 0)
+        model_lse = data * (coords_data > 0).astype(float)
+        lse_denom = np.dot(model_lse.ravel(), model_lse.ravel())
+        alpha = np.dot(model_lse.ravel(), data.ravel()) / lse_denom if lse_denom > 0 else 1.0
+
         init_params = QTable()
         init_params['x'] = x_coords + 0.0
         init_params['y'] = y_coords + 0.0
-        init_params['flux'] = coords_data[y_coords, x_coords] * net_scaling_factor
+        init_params['flux'] = data[y_coords, x_coords] * alpha
 
 
         # Define PSF fitting region
@@ -1426,21 +1490,11 @@ class FilamentMap:
 
         try:
             grouper = SourceGrouper(min_separation=1)
-            psfphot = PSFPhotometry(
-                psf_model,
-                fit_shape,
-                grouper=grouper,
-                fitter_maxiters=2
-            ) 
+            psfphot = PSFPhotometry(psf_model, fit_shape, grouper=grouper, fitter_maxiters=2)
             phot = psfphot(data, error=self.NoiseMap, init_params=init_params)
             tag = 'Grouped'
         except MemoryError:
-            psfphot = PSFPhotometry(
-                psf_model,
-                fit_shape,
-                grouper=None,
-                fitter_maxiters=2
-            ) 
+            psfphot = PSFPhotometry(psf_model, fit_shape, grouper=None, fitter_maxiters=2)
             phot = psfphot(data, error=self.NoiseMap, init_params=init_params)
             tag = 'NotGrouped'
             
@@ -1473,7 +1527,23 @@ class FilamentMap:
 
 
     def getMolecularMass(self, I_CO__2_1_16pc, alphaCO_tag, use_dynamic_alphaCO):
+        """Convert a CO(2-1) intensity map to molecular mass in solar masses per pixel.
 
+        If a directory of spatially resolved alphaCO maps is provided the matching map is
+        reprojected and applied pixel-by-pixel; otherwise a constant conversion factor of 5.5 is
+        used. NaN pixels in the dynamic map are filled with the constant where possible.
+
+        Parameters
+        ----------
+        - I_CO__2_1_16pc (ndarray): CO(2-1) integrated intensity map at blocked resolution.
+        - alphaCO_tag (str): Filename tag identifying which alphaCO map to match, e.g. 'SL24'.
+        - use_dynamic_alphaCO (str or Path or None): Directory of alphaCO FITS files, or None
+          to use the constant factor.
+
+        Returns
+        -------
+        - Molecular_Mass (ndarray): Pixel-level molecular mass map in solar masses per pixel.
+        """
         # Use PHANGS alphaCO
         if use_dynamic_alphaCO is not None:
             dir_path = use_dynamic_alphaCO
@@ -1549,6 +1619,20 @@ class FilamentMap:
         return Molecular_Mass
 
     def convertToCSV(self, Scale, tag, LineDensityMass, SurfaceDensityMass, segment_info_reprojected):
+        """Extract per-filament properties and write them to CSV and a molecular mass FITS file.
+
+        Computes length, line mass, total mass, and curvature for each entry in
+        segment_info_reprojected, then saves a CSV to SyntheticMap/ and a surface density FITS
+        to Molecular_Mass/.
+
+        Parameters
+        ----------
+        - Scale (float): CDD scale in parsecs, used as a column-name suffix in the CSV.
+        - tag (str): PSF fitting tag ('Grouped' or 'NotGrouped'), appended to output filenames.
+        - LineDensityMass (ndarray): Pixel-level molecular mass map for centerline extraction.
+        - SurfaceDensityMass (ndarray): Pixel-level molecular mass map for surface density output.
+        - segment_info_reprojected (dict): Filament dictionary from createFilamentDictionary.
+        """
         logger.info("Converting %d filaments to CSV at scale %s", len(segment_info_reprojected), Scale)
         csv_data = {}
 
@@ -1629,65 +1713,87 @@ class FilamentMap:
 
 
     def flux_toCo_21(self, I_F770W_16pc):
-            inclination = self.Inclination * np.pi / 180  # Inclination in radians
-            sSFR = self.SSFR
-            # I_F770W_16pc = model  
-            I_F770W_16pc = I_F770W_16pc * np.cos(inclination)
-            log_C_F770W = -0.21 * (np.log10(sSFR) + 10.14)  
-            valid_mask_1 = I_F770W_16pc > 0
-            x = np.zeros_like(I_F770W_16pc)
-            x[valid_mask_1] = np.log(I_F770W_16pc[valid_mask_1]) - log_C_F770W
-            log_I_CO_2_1_16pc = 0.88 * (x - 1.44) + 1.36
-            I_CO__2_1_16pc = 10**log_I_CO_2_1_16pc
-            I_CO__2_1_16pc[~valid_mask_1] = 0
-            return I_CO__2_1_16pc
+        """Convert a F770W surface brightness map to CO(2-1) integrated intensity using an empirical relation.
+
+        Applies inclination correction and the sSFR-dependent calibration from the associated
+        paper. Pixels with non-positive flux are set to zero in the output.
+
+        Parameters
+        ----------
+        - I_F770W_16pc (ndarray): F770W surface brightness in blocked pixel coordinates.
+
+        Returns
+        -------
+        - I_CO__2_1_16pc (ndarray): CO(2-1) integrated intensity map at the same resolution.
+        """
+        inclination = self.Inclination * np.pi / 180
+        sSFR = self.SSFR
+        I_F770W_16pc = I_F770W_16pc * np.cos(inclination)
+        log_C_F770W = -0.21 * (np.log10(sSFR) + 10.14)
+        valid_mask_1 = I_F770W_16pc > 0
+        x = np.zeros_like(I_F770W_16pc)
+        x[valid_mask_1] = np.log(I_F770W_16pc[valid_mask_1]) - log_C_F770W
+        log_I_CO_2_1_16pc = 0.88 * (x - 1.44) + 1.36
+        I_CO__2_1_16pc = 10**log_I_CO_2_1_16pc
+        I_CO__2_1_16pc[~valid_mask_1] = 0
+        return I_CO__2_1_16pc
     
 
-    def extractProperties(self,  model, fil_centers, phot, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale, globalfactor):
+    def extractProperties(self, model, fil_centers, phot, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale, globalfactor):
+        """Convert PSF photometry results into physical filament properties and write output files.
 
-            model = model *fil_centers #inly consider center line for surface density
-            #construct the mass map based on center line fits 
-            x_fit = phot['x_fit']
-            y_fit = phot['y_fit']
-            flux_fit = phot['flux_fit']
-            flux_map = np.zeros_like(self.BlockData, dtype=float) #use blocked data since PSF ran on blocked data
-            x_fit_int = np.clip(x_fit.astype(int), 0, flux_map.shape[1]-1)
-            y_fit_int = np.clip(y_fit.astype(int), 0, flux_map.shape[0]-1)
-            for x, y, f in zip(x_fit_int, y_fit_int, flux_fit):
-                flux_map[y, x] = f
-            I_F770W_16pc = flux_map*globalfactor #the dictionary only detects centerlines, and so those are the only meaningful pixels. It does not matter that we multiply by fil_centers or not.  
+        Builds a flux map from the fitted PSF centroids, converts F770W flux to CO(2-1) intensity,
+        computes molecular mass maps for both line density (centerline) and surface density (model),
+        then delegates to convertToCSV.
 
-            I_CO__2_1_16pc = self.flux_toCo_21(I_F770W_16pc)
-            Model_Co_2_1 = self.flux_toCo_21(model)
-
-            LineDensityMass = self.getMolecularMass(I_CO__2_1_16pc, alphaCO_tag, use_dynamic_alphaCO)
-            SurfaceDensityMass = self.getMolecularMass(Model_Co_2_1, alphaCO_tag, use_dynamic_alphaCO)
-
-
-            self.convertToCSV(Scale, tag, LineDensityMass, SurfaceDensityMass, segment_info_reprojected) #line density calculated from placing all flux in filament center and 
-            #surface density extracted fromc enter line of ysnthetic filament map.
-
-    def getSyntheticFilamentMapExact(self, min_scale, alphaCO_tag, use_dynamic_alphaCO = None, use_Regions = None, extract_Properties = True, write_fits = True, min_aspect_ratio = 8.2):
-
+        Parameters
+        ----------
+        - model (ndarray): Synthetic image from runPSF at blocked resolution.
+        - fil_centers (ndarray): Binary skeleton used to mask the model to centerline only.
+        - phot (astropy Table): PSFPhotometry result with x_fit, y_fit, flux_fit columns.
+        - tag (str): Fitting mode tag forwarded to output filenames.
+        - segment_info_reprojected (dict): Filament dictionary from createFilamentDictionary.
+        - alphaCO_tag (str): Tag for selecting the alphaCO conversion map.
+        - use_dynamic_alphaCO (str or Path or None): Directory of alphaCO maps, or None.
+        - Scale (float): CDD scale in parsecs.
+        - globalfactor (float): Rescaling factor from runPSF applied to the flux map.
         """
-        Use PSF fitting to create a synthetic image of only detected filaments. Then use this synthetic map to extract filament properties such as length, curvature, mass, line mass, surface density. 
-        The Process is as follows: 
+        model = model * fil_centers
+        x_fit = phot['x_fit']
+        y_fit = phot['y_fit']
+        flux_fit = phot['flux_fit']
+        flux_map = np.zeros_like(self.BlockData, dtype=float)
+        x_fit_int = np.clip(x_fit.astype(int), 0, flux_map.shape[1] - 1)
+        y_fit_int = np.clip(y_fit.astype(int), 0, flux_map.shape[0] - 1)
+        for x, y, f in zip(x_fit_int, y_fit_int, flux_fit):
+            flux_map[y, x] = f
+        I_F770W_16pc = flux_map * globalfactor
 
-        1. Load the original CDD image and the composite image
-        2. Process the composite image to remove junctions
-        3. Apply blocking to speed up PSF fitting   
-        4. Create a filament dictionary from the blocked and processed composite image using photutils segmentation to identify individual filaments
-        5. Create a labeled mask for all filaments
-        6. Reproject the labeled mask back to the original image size such that it lines up with the reprojected output from PSF. Use skeletonized filament to determine length and every pixel to find total mass. 
-        7. For each filament, fit PSFs along the filament to create a synthetic image of only filaments
-        8. If extract_Properties is True, extract filament properties using the synthetic image and the original CDD image
+        I_CO__2_1_16pc = self.flux_toCo_21(I_F770W_16pc)
+        Model_Co_2_1 = self.flux_toCo_21(model)
 
-        Parameters:
-        - alphaCO_tag (str): Tag to identify which alphaCO value to use from the config file
-        - use_dynamic_alphaCO (str): String to dynamic alphaCO map directory
-        - use_Regions (str): directory where all region files live
-        - extract_Properties (bool): Whether or not to extract filament properties
-        - write_fits (bool): Save the map as a fits file
+        LineDensityMass = self.getMolecularMass(I_CO__2_1_16pc, alphaCO_tag, use_dynamic_alphaCO)
+        SurfaceDensityMass = self.getMolecularMass(Model_Co_2_1, alphaCO_tag, use_dynamic_alphaCO)
+
+        self.convertToCSV(Scale, tag, LineDensityMass, SurfaceDensityMass, segment_info_reprojected)
+
+    def getSyntheticFilamentMapExact(self, min_scale, rep_centers, alphaCO_tag, use_dynamic_alphaCO=None, use_Regions=None, extract_Properties=True, write_fits=True, min_aspect_ratio=8.2):
+        """Build a PSF-based synthetic filament image and optionally extract physical properties.
+
+        Loads the CDD image, reprojects to blocked resolution, fits a circular Gaussian PSF along
+        each filament centerline, and writes a synthetic FITS map. If extract_Properties is True,
+        also computes length, mass, line mass, surface density, and curvature per filament.
+
+        Parameters
+        ----------
+        - min_scale (float): Minimum CDD scale in parsecs, used as the PSF FWHM reference.
+        - rep_centers (ndarray): Junction-free binary skeleton from processFilamentCenters.
+        - alphaCO_tag (str): Tag identifying which alphaCO map to use, e.g. 'SL24'.
+        - use_dynamic_alphaCO (str or Path or None): Directory of alphaCO FITS files, or None.
+        - use_Regions (str or Path or None): Directory of region mask FITS files, or None.
+        - extract_Properties (bool): Whether to run property extraction and write CSV output.
+        - write_fits (bool): Whether to save the synthetic map to SyntheticMap/.
+        - min_aspect_ratio (float): Minimum filament length-to-width ratio for detection.
         """
 
         logger.info("Beginning PSF synthetic map: %s", self.FitsFile)
@@ -1714,7 +1820,6 @@ class FilamentMap:
             coords_data = self.reprojectWrapper(coords_data, self.OrigHeader, self.BlockHeader, self.BlockData)
 
         # rep_centers: junction-free skeleton used for segmentation; coords_data: pre-junction skeleton used for PSF
-        rep_centers, coords_data = self.processFilamentCenters(coords_data)
 
         model, tag, globalfactor, phot = self.runPSF(data, coords_data, header, write_fits)
 
@@ -1726,8 +1831,24 @@ class FilamentMap:
             segment_info_reprojected, Scale = self.createFilamentDictionary(rep_centers, use_Regions, min_scale, min_aspect_ratio)
             self.extractProperties(model, rep_centers, phot, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale, globalfactor)
 
-    def getSyntheticFilamentMapApprox(self, min_scale, alphaCO_tag, use_dynamic_alphaCO = None, use_Regions = None, extract_Properties = True, write_fits = True, min_aspect_ratio = 8.2):
+    def getSyntheticFilamentMapApprox(self, min_scale, rep_centers, alphaCO_tag, use_dynamic_alphaCO=None, use_Regions=None, extract_Properties=True, write_fits=True, min_aspect_ratio=8.2):
+        """Build a least-squares estimate synthetic filament image as a faster alternative to PSF fitting.
 
+        Uses a linear scaling of the CDD image along filament centerlines followed by Gaussian
+        blurring rather than pixel-by-pixel PSF fitting. Property extraction is available but
+        disabled by default pending validation.
+
+        Parameters
+        ----------
+        - min_scale (float): Minimum CDD scale in parsecs, used as the Gaussian blur width.
+        - rep_centers (ndarray): Junction-free binary skeleton from processFilamentCenters.
+        - alphaCO_tag (str): Tag identifying which alphaCO map to use.
+        - use_dynamic_alphaCO (str or Path or None): Directory of alphaCO FITS files, or None.
+        - use_Regions (str or Path or None): Directory of region mask FITS files, or None.
+        - extract_Properties (bool): Whether to run property extraction (currently disabled).
+        - write_fits (bool): Whether to save the synthetic map to SyntheticMap/.
+        - min_aspect_ratio (float): Minimum filament length-to-width ratio for detection.
+        """
         logger.info("Beginning LSE approximate synthetic map: %s", self.FitsFile)
         fits_path = os.path.join(self.BaseDir, self.Label, "CDD")
         fits_path = os.path.join(fits_path, self.FitsFile if self.FitsFile.endswith(".fits") else self.FitsFile + ".fits")
@@ -1751,8 +1872,6 @@ class FilamentMap:
             data = self.reprojectWrapper(data, self.OrigHeader, self.BlockHeader, self.BlockData) 
             coords_data = self.reprojectWrapper(coords_data, self.OrigHeader, self.BlockHeader, self.BlockData)
         
-        rep_centers, coords_data = self.processFilamentCenters(coords_data) #rep_centers has intersects removed and is used for dictionary creation. 
-
         model, tag, globalfactor, phot = self.runImageLSE(data, coords_data, header, min_scale, write_fits)
 
         if extract_Properties: 
@@ -1764,10 +1883,28 @@ class FilamentMap:
             # self.extractProperties(model,  rep_centers, phot, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale, globalfactor) #Uncomment!
 
     def runImageLSE(self, data, coords_data, header, min_scale, write_fits):
+        """Build a synthetic filament image using least-squares scaling and Gaussian blurring.
 
+        Scales the CDD image along centerline pixels by the optimal linear factor, then blurs with
+        a Gaussian kernel at the scale width. Faster than PSF fitting but less accurate for
+        photometric measurements.
 
+        Parameters
+        ----------
+        - data (ndarray): CDD image at blocked resolution.
+        - coords_data (ndarray): Binary skeleton image marking filament centerline pixels.
+        - header (astropy Header): FITS header of the CDD image.
+        - min_scale (float): Minimum CDD scale in parsecs, used as the Gaussian blur FWHM.
+        - write_fits (bool): Whether to save the synthetic map to SyntheticMap/.
 
-        model = data * coords_data #estimate filament centerline flux by taking the value from the original image
+        Returns
+        -------
+        - model (ndarray): Synthetic filament image in blocked pixel coordinates.
+        - tag (str): Always 'approximateFit'.
+        - globalfactor (float): Always 1 (no additional rescaling applied).
+        - phot (astropy Table): Table of fitted pixel positions and flux values.
+        """
+        model = data * coords_data
     
 
         alpha = np.dot(model.ravel(), data.ravel()) / np.dot(model.ravel(), model.ravel())
@@ -1977,20 +2114,21 @@ def circular_region(radius):
 
 
 def padwithnans(vector, pad_width, iaxis, kwargs):
-    left, right = (int(pad_width[0]), int(pad_width[1]))
+    """Pad the edges of a 1D vector with NaN values; used as the padding function for np.pad in rht."""
+    left, right = int(pad_width[0]), int(pad_width[1])
     vector[:left] = np.nan
     vector[-right:] = np.nan
     return vector
 
 
 def find_nearest(array, value):
-    idx = (np.abs(array-value)).argmin()
-    return array[idx]
+    """Return the element of array closest in value to value."""
+    return array[(np.abs(array - value)).argmin()]
 
 
 def find_nearest_posn(array, value):
-    idx = (np.abs(array-value)).argmin()
-    return idx
+    """Return the index of the element of array closest in value to value."""
+    return (np.abs(array - value)).argmin()
 
 
 def circ_mean(theta, weights=None):
@@ -2017,9 +2155,7 @@ def circ_mean(theta, weights=None):
 
 
 def fourier_shifter(x, shift, axis):
-    '''
-    Shift an array by some value along its axis.
-    '''
+    """Shift array x by shift samples along axis using a Fourier phase shift."""
     ftx = np.fft.fft(x, axis=axis)
     m = np.fft.fftfreq(x.shape[axis])
     # m_shape = [1] * x.ndim

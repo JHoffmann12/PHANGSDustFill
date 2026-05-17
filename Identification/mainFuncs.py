@@ -1,217 +1,208 @@
 import logging
+import os
+import re
 from pathlib import Path
-import FilamentMap
+
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
-import os
 import pandas as pd
-import re
-from astropy.coordinates import EarthLocation
-from astropy.io import fits
-from astropy.table import Table
-import astropy.units as u
+
+import FilamentMap
 
 matplotlib.use('Agg')
 
 logger = logging.getLogger(__name__)
 
+
 def getMJysr(bandstr, inststr):
-    if bandstr=='F770W': sigma_MJysr=0.11 # JWST Cycle 1 imaging 1-sigma surface brightness sensitivity from Lee+23 (JWST survey paper) with units of MJy/sr
-    if bandstr=='F1000W': sigma_MJysr=0.12
-    if bandstr=='F1130W': sigma_MJysr=0.15
-    if bandstr=='F2100W': sigma_MJysr=0.25
-    if bandstr=='F360M': sigma_MJysr=0.58
-    if bandstr=='F335M': sigma_MJysr=0.42
-    if bandstr=='F300M': sigma_MJysr=0.45
-    if bandstr=='F200W': sigma_MJysr=0.68
-    if bandstr=='F187N': sigma_MJysr=1.00 #TBD using Cycle 2, also do the others above change for Cycle 2??
-    if bandstr=='F150W': sigma_MJysr=1.00 #TBD using Cycle 2
-    else:
-        sigma_MJysr = 0
-    return sigma_MJysr 
+    """Return the JWST Cycle 1 1-sigma surface brightness sensitivity in MJy/sr for a given band.
+
+    Values are from Lee et al. 2023 (JWST survey paper). Cycle 2 values for F187N and F150W
+    are placeholders pending updated measurements.
+
+    Parameters
+    ----------
+    - bandstr (str): Filter name, e.g. 'F770W'.
+    - inststr (str): Instrument name (unused; reserved for future multi-instrument support).
+
+    Returns
+    -------
+    - sigma_MJysr (float): 1-sigma sensitivity in MJy/sr, or 0 if the band is not recognised.
+    """
+    band_sensitivity = {
+        'F770W':  0.11,
+        'F1000W': 0.12,
+        'F1130W': 0.15,
+        'F2100W': 0.25,
+        'F360M':  0.58,
+        'F335M':  0.42,
+        'F300M':  0.45,
+        'F200W':  0.68,
+        'F187N':  1.00,  # TBD from Cycle 2 data
+        'F150W':  1.00,  # TBD from Cycle 2 data
+    }
+    return band_sensitivity.get(bandstr, 0)
 
 
 def getInfo(label, csv_path):
+    """Read per-image metadata from the Excel catalogue and return processing parameters.
+
+    Parameters
+    ----------
+    - label (str): Image label in the form 'galaxyname_BAND', e.g. 'NGC0628_F770W'.
+    - csv_path (str or Path): Path to the ImageData.xlsx catalogue.
+
+    Returns
+    -------
+    - distance_Mpc (float): Distance to the galaxy in megaparsecs.
+    - res (float): Angular resolution in arcseconds.
+    - pixscale (float): Pixel scale in arcseconds per pixel.
+    - MJysr (float): 1-sigma surface brightness sensitivity in MJy/sr (NaN if source removal disabled).
+    - Band (str): Filter name.
+    - min_power (int): log2 of the minimum CDD decomposition scale in parsecs.
+    - max_power (int): log2 of the maximum CDD decomposition scale in parsecs.
+    - Rem_sources (bool): Whether compact source removal should be applied.
+    - sSFR (float): Specific star formation rate (NaN if not in catalogue).
+    - inclination (float): Galaxy inclination angle in degrees (NaN if not in catalogue).
     """
-    Read the csv file for information about an image and return the distance, res, pixscale, and powers of 2
-
-    Parameter
-    - label (str): The label for the celestial object that the image is of, commonly a galaxy name
-    - csv_path (str): The path to the csv file containing relevant information
-
-    Returns:
-    - distance (float): distance to the image
-    - res (float): angular resolution
-    - pixscale (float): pixel resolution
-    - min_power (float): minimum power of 2 for scale decomposition
-    - max_power (float): maximum power of 2 for scale decomposition
-    """
-
     logger.info('Processing label: %s', label)
-    
-    # Check for any hidden characters or extra whitespace
-    label_clean = label.strip()
-    if label != label_clean:
-        logger.warning("Label had whitespace. Original: '%s', Cleaned: '%s'", label, label_clean)
-        label = label_clean
-    
+
+    label = label.strip()
     table = pd.read_excel(csv_path)
-    
-    # Split on underscore
+
     parts = label.split("_")
     if len(parts) < 2:
-        print(f"Error: Label '{label}' doesn't contain an underscore separator")
+        logger.error("Label '%s' does not contain an underscore separator", label)
         return None
-    
-    # Take everything except the last part as the label, last part as band
-    band = parts[-1]
+
+    band       = parts[-1]
     label_name = "_".join(parts[:-1])
-    
+
     logger.debug("Searching for: label='%s', band='%s'", label_name, band)
-    
     logger.debug("Available labels in Excel: %s", table['label'].unique())
     logger.debug("Available bands in Excel: %s", table['Band'].unique())
 
-    try: 
+    try:
         label_info = table[
-            (table['label'].str.strip().str.lower() == label_name.lower()) & 
-            (table['Band'].str.strip().str.lower() == band.lower())
+            (table['label'].str.strip().str.lower() == label_name.lower()) &
+            (table['Band'].str.strip().str.lower()  == band.lower())
         ]
     except KeyError as e:
-        logger.error("Cannot find required columns in Excel file: %s. Available columns: %s", e, table.columns.tolist())
+        logger.error("Cannot find required columns in Excel file: %s. Available: %s", e, table.columns.tolist())
         exit(1)
 
-    if not label_info.empty:
-        logger.info("Found match: %s_%s", label_name, band)
-        distance = label_info.iloc[0]['current_dist']
-        res = label_info.iloc[0]['res']
-        pixscale = label_info.iloc[0]['pixscale']
-        min_power = label_info.iloc[0]['Power of 2 min']
-        max_power = label_info.iloc[0]['Power of 2 max']
-        Rem_sources = label_info.iloc[0]['Rem_sources']
-        Band = label_info.iloc[0]['Band']
-        Instr = label_info.iloc[0]['INSTR']
-
-        try: 
-            sSFR = label_info.iloc[0]['SSFR']
-            inclination = label_info.iloc[0]['Inclination Angle']
-        except: 
-            sSFR = np.nan
-            inclination = np.nan
-
-        if bool(Rem_sources):
-            MJysr = getMJysr(Band, Instr)
-        else:
-            MJysr = np.nan #not needed
-
-        return distance, res, pixscale, MJysr, Band, min_power, max_power, bool(Rem_sources), sSFR, inclination
-    
-    else: 
-        logger.error("Image '%s' with band '%s' not found in Excel file. Check label and Band columns.", label_name, band)
+    if label_info.empty:
+        logger.error("Image '%s' with band '%s' not found in Excel file.", label_name, band)
         return None
+
+    logger.info("Found match: %s_%s", label_name, band)
+    distance  = label_info.iloc[0]['current_dist']
+    res       = label_info.iloc[0]['res']
+    pixscale  = label_info.iloc[0]['pixscale']
+    min_power = label_info.iloc[0]['Power of 2 min']
+    max_power = label_info.iloc[0]['Power of 2 max']
+    Rem_sources = label_info.iloc[0]['Rem_sources']
+    Band      = label_info.iloc[0]['Band']
+    Instr     = label_info.iloc[0]['INSTR']
+
+    try:
+        sSFR        = label_info.iloc[0]['SSFR']
+        inclination = label_info.iloc[0]['Inclination Angle']
+    except Exception:
+        sSFR        = np.nan
+        inclination = np.nan
+
+    MJysr = getMJysr(Band, Instr) if bool(Rem_sources) else np.nan
+
+    return distance, res, pixscale, MJysr, Band, min_power, max_power, bool(Rem_sources), sSFR, inclination
 
 
 def getMinSnakeLengthFromAspectRatio(min_aspect_ratio, ref_scale_pc=16.0, ref_scalepix=5.25):
+    """Convert a minimum aspect ratio into the SOAX minimum snake length at the shortest CDD scale.
+
+    Filament width in pixels equals the scale divided by the pixel scale (16 pc / ScalePix).
+    The reference pixel scale of 5.25 pc/px is representative of PHANGS F770W at 16 pc; with
+    the default ratio of 8.2 this returns 25 pixels, matching the previously hardcoded value.
+
+    Parameters
+    ----------
+    - min_aspect_ratio (float): Minimum length-to-width ratio for a valid filament.
+    - ref_scale_pc (float): Minimum CDD scale in parsecs (default 16).
+    - ref_scalepix (float): Reference parsecs per pixel at that scale (default 5.25).
+
+    Returns
+    -------
+    - min_snake_length_ss (int): Minimum snake length in pixels for SOAX at the shortest scale.
     """
-    Convert a minimum aspect ratio into a SOAX minimum snake length.
-
-    Filament width in pixels = Scale / ScalePix (16 pc / ScalePix at the minimum CDD scale).
-    min_snake_length = round(min_aspect_ratio * width).
-
-    The reference ScalePix of 5.25 pc/px is representative of the PHANGS F770W dataset at 16 pc.
-    With the default ratio of 8.2, this returns 25 px — matching the previous hardcoded value.
-
-    Parameters:
-    - min_aspect_ratio (float): desired minimum length-to-width ratio for a valid filament
-    - ref_scale_pc (float): minimum CDD scale in parsecs (default 16)
-    - ref_scalepix (float): reference parsecs-per-pixel at that scale (default 5.25)
-
-    Returns:
-    - min_snake_length_ss (int): minimum snake length in pixels for SOAX at the shortest scale
-    """
-    ref_width_pix = ref_scale_pc / ref_scalepix
+    ref_width_pix      = ref_scale_pc / ref_scalepix
     min_snake_length_ss = round(min_aspect_ratio * ref_width_pix)
-    logger.info(
-        "min_aspect_ratio=%.2f → ref_width=%.2f px → min_snake_length_ss=%d",
-        min_aspect_ratio, ref_width_pix, min_snake_length_ss,
-    )
+    logger.info("min_aspect_ratio=%.2f → ref_width=%.2f px → min_snake_length_ss=%d", min_aspect_ratio, ref_width_pix, min_snake_length_ss)
     return min_snake_length_ss
 
 
-def setUpGalaxy(base_dir, label_folder_path,  label, distance_Mpc, res, pixscale, param_file_path, noise_min, flatten_perc, min_intensity, sSFR, Inclination): 
+def setUpGalaxy(base_dir, label_folder_path, label, distance_Mpc, pixscale,
+                param_file_path, noise_min, flatten_perc, min_intensity, sSFR, Inclination):
+    """Construct a FilamentMap object for each scale-decomposed image of a galaxy.
 
-    """
-    Constructs a filament map object for each scale decomposed image of a label/celestial object. 
-    Sets the blocked data and signal to noise image used in the SOAX algorithm. 
+    Parameters
+    ----------
+    - base_dir (str or Path): Base directory for all FilPHANGS output files.
+    - label_folder_path (str or Path): Path to the output folder for this galaxy.
+    - label (str): Galaxy label, e.g. 'NGC0628_F770W'.
+    - distance_Mpc (float): Distance to the galaxy in megaparsecs.
+    - pixscale (float): Pixel scale in arcseconds per pixel.
+    - param_file_path (str or Path): Path to the SOAX parameter text file.
+    - noise_min (float): Floor on background RMS noise to prevent division by near-zero.
+    - flatten_perc (float): Percentile for the arctan intensity rescaling applied before SOAX.
+    - min_intensity (float): Pixels in the original image below this value are zeroed out.
+    - sSFR (float): Specific star formation rate used in CO conversion.
+    - Inclination (float): Galaxy inclination in degrees used in CO conversion.
 
-    Parameters:
-    - base_dir (str): Base directory for all FilPHANGS files
-    - label_folder_path (str): path to the folder associated with the specified label/celestial object
-    - label (str): label of the desired celestial object
-    - distance_Mpc (float): Distance in Mega Parsecs to the celestial object
-    - res (float): angula resolution associated with the image
-    - pixscale (str): The pixel level resolution associated with the image
-    - param_file_path (float): Path to the file containing the soax parameters
-    - noise_min (float): minimum noise to be considered realistic in the image
-    - flatten_perc (str): Percentage to use in the arctan transform
-    - min_intensity (float): Minimum intensity in original image for valid pixel
-    
-    Returns:
-    - FilamentMapList (Filament Map): returns a list of the filament map objects for each scale of an image. 
-   
+    Returns
+    -------
+    - FilamentMapList (list): One FilamentMap per scale-decomposed FITS file found in CDD/.
     """
-        
     FilamentMapList = []
-
     CDD_folder = os.path.join(label_folder_path, "CDD")
 
-    for fits_file in os.listdir(CDD_folder): #iterate through CDD folder to create filament map objects for each scale decomposed image
-
-        if(fits_file.endswith(".fits")): 
-            ScalePix = pixscale * 4.848 * distance_Mpc  #convert to parcecs per pixel
-            filMap = FilamentMap.FilamentMap(ScalePix, base_dir, label_folder_path, fits_file, label, param_file_path, flatten_perc, min_intensity, sSFR, Inclination) #create object
-            filMap.setBlockData() #set the blocked data
-            filMap.setBkgSubDivRMS(noise_min) #set the background subtracted and noise divided data
-            FilamentMapList.append(filMap) 
+    for fits_file in os.listdir(CDD_folder):
+        if fits_file.endswith(".fits"):
+            ScalePix = pixscale * 4.848 * distance_Mpc
+            filMap = FilamentMap.FilamentMap(ScalePix, base_dir, label_folder_path, fits_file, label, param_file_path, flatten_perc, min_intensity, sSFR, Inclination)
+            filMap.setBlockData()
+            filMap.setBkgSubDivRMS(noise_min)
+            FilamentMapList.append(filMap)
 
     return FilamentMapList
 
 
-def CreateSNRPlot(FilamentMapList, base_dir, percentile, write = False):
+def CreateSNRPlot(FilamentMapList, base_dir, percentile, write=False):
+    """Plot the SNR at a given percentile versus physical scale for each galaxy.
 
+    Parameters
+    ----------
+    - FilamentMapList (list): FilamentMap objects for a single galaxy across all scales.
+    - base_dir (str or Path): Base directory; figure is saved to base_dir/Figures/.
+    - percentile (float): Percentile (0–100) of the SNR map to extract per scale.
+    - write (bool): Whether to save the figure to disk.
     """
-    Create a plot of the Signal to noise ratio in an image before scaling the background subtracted and nosie divided image. 
-
-    Parameters:
-    - FilamentMapList (Filament Map): List of Scale ecomposed Filament Maps associated with a single label
-    - base_dir (str): path to the base directory
-    - percentile (float): percentile to create the SNR plot from
-    - write (bool): Boolean to indicate whether or not the plot should be saved 
-    """
-
     label_dict = {}
-
-    for filMap in FilamentMapList:  # Iterate over each object, extract the needed data, and append to label_dict
+    for filMap in FilamentMapList:
         label = filMap.getLabel()
-
         if label not in label_dict:
             label_dict[label] = []
+        SNRMap = filMap.getBkgSubDivRMSMap()
+        scale  = float(filMap.getScale().replace('pc', ''))
+        label_dict[label].append((scale, np.percentile(SNRMap, percentile)))
 
-        SNRMap = filMap.getBkgSubDivRMSMap() 
-        scale = filMap.getScale()
-        scale = scale.replace('pc', "")
-        scale = float(scale)
-        label_dict[label].append((scale, np.percentile(SNRMap, percentile))) 
-
-    # Create scatter plot with points from each scale decomposed image
     for label, data in label_dict.items():
-        scales, percentiles = zip(*data)  # Unpack scales and percentiles
+        scales, percentiles = zip(*data)
         plt.figure()
-        plt.scatter(scales, percentiles, label= f"Celestial Object: {label}")
+        plt.scatter(scales, percentiles, label=f"Celestial Object: {label}")
         plt.xlabel("Scale (pc)")
-        plt.ylabel(f"SNR {percentile} percentile")
-        plt.title(f"SNR Plot for Galaxy: {label} without normalization and using unique masks")
+        plt.ylabel(f"SNR {percentile}th percentile")
+        plt.title(f"SNR vs Scale — {label}")
         plt.legend()
         plt.grid(True)
 
@@ -220,34 +211,22 @@ def CreateSNRPlot(FilamentMapList, base_dir, percentile, write = False):
     plt.close()
 
 
-
 def clearAllFiles(base_directory, csv_path, param_file_path):
+    """Delete all pipeline output files while preserving OriginalImages and the two metadata files.
 
+    Parameters
+    ----------
+    - base_directory (str or Path): Root output directory to clear.
+    - csv_path (str or Path): Path to ImageData.xlsx — excluded from deletion.
+    - param_file_path (str or Path): Path to SoaxParams.txt — excluded from deletion.
     """
-    Clears all files in subfolders under the specified base directory,
-    but keeps files directly in the base directory and files in the "originalImages" folder untouched.
-
-    Parameters:
-    - base_directory (str): Path to the base directory to clear.
-    - csv_path (str): Path to the CSV file to exclude from deletion.
-    - param_file_path (str): Path to the parameter file to exclude from deletion.
-    """
-
-    # Walk through all directories and files
     for foldername, subfolders, filenames in os.walk(base_directory):
-        # Skip the root directory itself (no files will be deleted here)
         if foldername == base_directory:
             continue
-
-        # Skip the "originalImages" folder and its contents
-        if "originalimages" in foldername.lower():  # Ensures case-insensitive check
+        if "originalimages" in foldername.lower():
             continue
-        
-        # Delete files in subdirectories
         for filename in filenames:
             file_path = os.path.join(foldername, filename)
-            
-            # Check if the file is not the CSV or parameter file, and ensure it's not in the "originalImages" folder
             if file_path != csv_path and file_path != param_file_path:
                 os.remove(file_path)
                 logger.debug("Deleted file: %s", file_path)
@@ -256,95 +235,95 @@ def clearAllFiles(base_directory, csv_path, param_file_path):
 
 
 def createDirectoryStructure(base_directory, csv_path, ID_set=False):
-    """
-    Creates the directory structure as described in the ReadME. Subfolders are created based on images present in the "OriginalImages" folder.
+    """Create the per-galaxy output folder tree under base_directory for each image in OriginalImages/.
 
-    Parameters:
-    - base_directory (str): Path to the base directory for which all subfolders and files will be held.
-    - csv_path (str): Path to the CSV file containing image information.
-    - ID_set (bool): If True, an image ID is extracted from the filename as the string after the final
-                     underscore (before the extension) and appended to the galaxy label folder name.
-                     If False, behaviour is identical to the original.
-    """
+    Existing directories are left untouched, so this is safe to re-run. Each galaxy receives
+    subfolders for CDD, Composites, BlockedPng, SyntheticMap, SoaxOutput, BkgSubDivRMS, and
+    Source_Removal, with per-scale subdirectories inside SoaxOutput.
 
-    folder_path = os.path.join(base_directory, "OriginalImages")
+    Parameters
+    ----------
+    - base_directory (str or Path): Root output directory.
+    - csv_path (str or Path): Path to ImageData.xlsx, used to look up scale ranges.
+    - ID_set (bool): If True, a unique image ID extracted from the filename is appended to
+      the galaxy folder name to support multiple images of the same galaxy.
+    """
+    folder_path    = os.path.join(base_directory, "OriginalImages")
     os.makedirs(base_directory, exist_ok=True)
-    figures_folder = os.path.join(base_directory, "Figures")
-    os.makedirs(figures_folder, exist_ok=True)
+    os.makedirs(os.path.join(base_directory, "Figures"), exist_ok=True)
 
     for filename in os.listdir(folder_path):
+        if not filename.endswith('.fits'):
+            continue
 
-        if filename.endswith('.fits'):
-            match = re.match(r"(.+?)_(F\d+[A-Z])[_.]", filename)
+        match = re.match(r"(.+?)_(F\d+[A-Z])[_.]", filename)
+        if not match:
+            logger.warning("Could not parse filename: %s", filename)
+            continue
 
-            if match:
-                label_name = match.group(1)
-                band       = match.group(2)
-                label      = f"{label_name}_{band}"
+        label_name = match.group(1)
+        band       = match.group(2)
+        label      = f"{label_name}_{band}"
 
-                # Extract image ID if requested
-                if ID_set:
-                    stem     = os.path.splitext(filename)[0]   # strip .fits
-                    image_id = stem.rsplit('_', 1)[-1]          # last token
-                    folder_label = f"{label}_{image_id}"
-                else:
-                    folder_label = label
+        if ID_set:
+            stem         = os.path.splitext(filename)[0]
+            image_id     = stem.rsplit('_', 1)[-1]
+            folder_label = f"{label}_{image_id}"
+        else:
+            image_id     = None
+            folder_label = label
 
-                logger.info("Processing file: %s (label=%s%s)", filename, label, f"  ID: {image_id}" if ID_set else "")
+        logger.info(
+            "Processing file: %s (label=%s%s)",
+            filename, label, f"  ID: {image_id}" if ID_set else "",
+        )
 
-                # Create the galaxy folder (with or without ID suffix)
-                label_folder = os.path.join(base_directory, folder_label)
-                os.makedirs(label_folder, exist_ok=True)
+        label_folder = os.path.join(base_directory, folder_label)
+        os.makedirs(label_folder, exist_ok=True)
 
-                info_result = getInfo(label, csv_path)
+        info_result = getInfo(label, csv_path)
+        if info_result is None:
+            logger.warning("Skipping %s — not found in Excel file", label)
+            continue
 
-                if info_result is None:
-                    logger.warning("Skipping %s — not found in Excel file", label)
-                    continue
+        _, _, _, _, _, min_power, max_power, _, _, _ = info_result
 
-                _, _, _, _, _, min_power, max_power, _, _, _ = info_result
+        subfolders = [
+            "CDD", "Composites", "BlockedPng", "SyntheticMap",
+            "SoaxOutput", "BkgSubDivRMS", "Source_Removal",
+        ]
+        soax_subfolders = [
+            f"{2**i}pc" for i in range(int(min_power), int(max_power) + 1)
+        ]
 
-                subfolders = [
-                    "CDD", "Composites", "BlockedPng", "SyntheticMap",
-                    "SoaxOutput", "BkgSubDivRMS", "Source_Removal"
-                ]
+        for subfolder in subfolders:
+            subfolder_path = os.path.join(label_folder, subfolder)
+            os.makedirs(subfolder_path, exist_ok=True)
+            if subfolder == "SoaxOutput":
+                for s in soax_subfolders:
+                    os.makedirs(os.path.join(subfolder_path, s), exist_ok=True)
+            if subfolder == "Source_Removal":
+                os.makedirs(os.path.join(subfolder_path, "CDD_Pix"),       exist_ok=True)
+                os.makedirs(os.path.join(subfolder_path, "Source_Tables"), exist_ok=True)
 
-                soax_subfolders = [
-                    str(2**i) + "pc"
-                    for i in range(int(min_power), int(max_power) + 1)
-                ]
-
-                for subfolder in subfolders:
-                    subfolder_path = os.path.join(label_folder, subfolder)
-                    os.makedirs(subfolder_path, exist_ok=True)
-
-                    if subfolder == "SoaxOutput":
-                        for soax_subfolder in soax_subfolders:
-                            os.makedirs(os.path.join(subfolder_path, soax_subfolder), exist_ok=True)
-
-                    if subfolder == "Source_Removal":
-                        os.makedirs(os.path.join(subfolder_path, "CDD_Pix"),        exist_ok=True)
-                        os.makedirs(os.path.join(subfolder_path, "Source_Tables"),  exist_ok=True)
-
-                logger.info("Directory structure created for: %s", folder_label)
-            else:
-                logger.warning("Could not parse filename: %s", filename)
+        logger.info("Directory structure created for: %s", folder_label)
 
 
 def renameFitsFiles(base_dir, csv_path, ID_set=False):
-    """
-    Renames FITS files based on information from an Excel file. Forces naming
-    convention discussed in the ReadMe.
+    """Standardise FITS filenames in OriginalImages/ using metadata from the Excel catalogue.
 
-    Parameters:
-    - base_dir (str): Path to the base directory containing the FITS files.
-    - csv_path (str): Path to the Excel file containing image information.
-    - ID_set (bool): If True, the image ID (string after the final underscore,
-                     before the extension) is preserved and appended to the new
-                     filename.  If False, behaviour is identical to the original.
-    """
+    The new name format is: label_Band_Telescope_ImageType[_ID].fits. Files not found in the
+    catalogue are skipped with a warning. Re-running is safe; files already at the target name
+    are renamed to themselves.
 
-    table = pd.read_excel(csv_path)
+    Parameters
+    ----------
+    - base_dir (str or Path): Base directory containing the OriginalImages/ subfolder.
+    - csv_path (str or Path): Path to ImageData.xlsx.
+    - ID_set (bool): If True, the trailing token of the original filename is preserved as an
+      image ID appended to the new name.
+    """
+    table                = pd.read_excel(csv_path)
     fits_file_folder_path = os.path.join(base_dir, "OriginalImages")
 
     for fits_file in os.listdir(fits_file_folder_path):
@@ -352,15 +331,13 @@ def renameFitsFiles(base_dir, csv_path, ID_set=False):
         filename       = os.path.basename(fits_file)
 
         match = re.match(r"([^_]+)_([^_]+)", filename)
-
         if not match:
-            print(f"Could not extract galaxy name from {filename}")
+            logger.warning("Could not extract galaxy name from %s", filename)
             continue
 
         label = match.group(1)
         band  = match.group(2)
 
-        # Extract image ID if requested
         if ID_set:
             stem     = os.path.splitext(filename)[0]
             image_id = stem.rsplit('_', 1)[-1]
@@ -376,27 +353,20 @@ def renameFitsFiles(base_dir, csv_path, ID_set=False):
             logger.error("Cannot find 'label' column in Excel file")
             exit(1)
 
-        if not label_info.empty:
-            telescope = label_info.iloc[0]['Telescope']
-            band      = label_info.iloc[0]['Band']
-            img_type  = label_info.iloc[0]['Image_Type']
-
-            # Build base new name
-            if "starsub" in filename.lower():
-                base_name = f"{label}_{band}_{telescope}_{img_type}_starsub"
-            else:
-                base_name = f"{label}_{band}_{telescope}_{img_type}"
-
-            # Append ID if present
-            if image_id:
-                new_filename = f"{base_name}_{image_id}.fits"
-            else:
-                new_filename = f"{base_name}.fits"
-
-            new_filepath = os.path.join(fits_file_folder_path, new_filename)
-            os.rename(full_file_path, new_filepath)
-            logger.info("Renamed %s → %s", filename, new_filename)
-        else:
+        if label_info.empty:
             logger.warning("Not found in Excel file: %s / %s", label, band)
+            continue
+
+        telescope = label_info.iloc[0]['Telescope']
+        band      = label_info.iloc[0]['Band']
+        img_type  = label_info.iloc[0]['Image_Type']
+
+        suffix    = "_starsub" if "starsub" in filename.lower() else ""
+        base_name = f"{label}_{band}_{telescope}_{img_type}{suffix}"
+        new_filename = f"{base_name}_{image_id}.fits" if image_id else f"{base_name}.fits"
+
+        new_filepath = os.path.join(fits_file_folder_path, new_filename)
+        os.rename(full_file_path, new_filepath)
+        logger.info("Renamed %s → %s", filename, new_filename)
 
     logger.info("Renaming process completed.")
