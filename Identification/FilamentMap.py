@@ -59,7 +59,7 @@ matplotlib.use('Agg')
 
 class FilamentMap:
 
-    def __init__(self,  scalepix, base_dir, label_folder_path, fits_file, label, param_file_path, flatten_perc, min_intensity):
+    def __init__(self,  scalepix, base_dir, label_folder_path, fits_file, label, param_file_path, flatten_perc, min_intensity, sSFR, Inclination):
 
         '''
         Filament Map Constructor.
@@ -130,6 +130,8 @@ class FilamentMap:
         self.IntensityMap = np.zeros_like(self.BlockData)
         self.NoiseMap = np.zeros_like(self.BlockData)
         self.ParamFile = param_file_path
+        self.SSFR = sSFR
+        self.Inclination = Inclination 
 
 
 
@@ -1437,10 +1439,11 @@ class FilamentMap:
         ratiomean,ratiomedian,ratiostd=sigma_clipped_stats(ratiouseful, sigma=2, maxiters=5)
         globalfactor=ratiomedian
         model = globalfactor * model
+        model_reprojected = self.reprojectWrapper(model, self.BlockHeader, self.OrigHeader, self.OrigData) 
 
         if(write_fits):
             out_path = Path(f"{self.BaseDir}/{self.Label}/SyntheticMap/{self.FitsFile}_SyntheticMap_{tag}.fits")
-            hdu = fits.PrimaryHDU(model, header=header)
+            hdu = fits.PrimaryHDU(model_reprojected, header=header)
             hdu.writeto(out_path, overwrite=True)
 
 
@@ -1611,9 +1614,11 @@ class FilamentMap:
         # df.to_csv(csv_path, index=False)
 
 
+
+
     def flux_toCo_21(self, I_F770W_16pc):
-            inclination = 9 * np.pi / 180  # Inclination in radians
-            sSFR = 1.74 #get specific SFR*
+            inclination = self.Inclination * np.pi / 180  # Inclination in radians
+            sSFR = self.SSFR
             # I_F770W_16pc = model  
             I_F770W_16pc = I_F770W_16pc * np.cos(inclination)
             log_C_F770W = -0.21 * (np.log10(sSFR) + 10.14)  
@@ -1626,8 +1631,7 @@ class FilamentMap:
             return I_CO__2_1_16pc
     
 
-
-    def extractProperties(self, model, fil_centers, phot, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale, globalfactor):
+    def extractProperties(self,  model, fil_centers, phot, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale, globalfactor):
 
             model = model *fil_centers #inly consider center line for surface density
             #construct the mass map based on center line fits 
@@ -1713,7 +1717,7 @@ class FilamentMap:
             rep_centers[rep_centers > 0] = 1
             #Create a filament dictionary 
             segment_info_reprojected, Scale = self.createFilamentDictionary(rep_centers, use_Regions, min_scale) 
-            self.extractProperties(model,  rep_centers, phot, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale, globalfactor)
+            self.extractProperties(model, rep_centers, phot, tag, segment_info_reprojected, alphaCO_tag, use_dynamic_alphaCO, Scale, globalfactor)
 
     def getSyntheticFilamentMapApprox(self, min_scale, alphaCO_tag, use_dynamic_alphaCO = None, use_Regions = None, extract_Properties = True, write_fits = True):
 
@@ -1794,9 +1798,11 @@ class FilamentMap:
         tag = 'approximateFit'
         globalfactor = 1
 
+        model_reprojected = self.reprojectWrapper(model, self.BlockHeader, self.OrigHeader, self.OrigData) 
+
         if(write_fits):
-            out_path = Path(f"{self.BaseDir}/{self.Label}/SyntheticMap/{self.FitsFile}_SyntheticMapApprox.fits")
-            hdu = fits.PrimaryHDU(model, header=header)
+            out_path = Path(f"{self.BaseDir}/{self.Label}/SyntheticMap/{self.FitsFile}_SyntheticMap_{tag}.fits")
+            hdu = fits.PrimaryHDU(model_reprojected, header=header)
             hdu.writeto(out_path, overwrite=True)
 
         #debugging
@@ -2108,7 +2114,7 @@ def filter_short_components(binary_image, min_len_pix):
         if not np.any(component_mask):
             continue
 
-        # --- Detect if already skeletonized ---
+        # Detect if already skeletonized
         neighbors = ndimage.convolve(component_mask.astype(int),
                                     np.ones((3, 3)),
                                     mode='constant', cval=0)

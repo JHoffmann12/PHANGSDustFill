@@ -30,7 +30,6 @@ def getMJysr(bandstr, inststr):
 
 
 def getInfo(label, csv_path):
-
     """
     Read the csv file for information about an image and return the distance, res, pixscale, and powers of 2
 
@@ -44,23 +43,46 @@ def getInfo(label, csv_path):
     - pixscale (float): pixel resolution
     - min_power (float): minimum power of 2 for scale decomposition
     - max_power (float): maximum power of 2 for scale decomposition
-
     """
 
     print(f'Label is {label}')
+    
+    # Check for any hidden characters or extra whitespace
+    label_clean = label.strip()
+    if label != label_clean:
+        print(f"Warning: Label had whitespace. Original: '{label}', Cleaned: '{label_clean}'")
+        label = label_clean
+    
     table = pd.read_excel(csv_path)
-    label, band = label.split("_")
+    
+    # Split on underscore
+    parts = label.split("_")
+    if len(parts) < 2:
+        print(f"Error: Label '{label}' doesn't contain an underscore separator")
+        return None
+    
+    # Take everything except the last part as the label, last part as band
+    band = parts[-1]
+    label_name = "_".join(parts[:-1])
+    
+    print(f"Searching for: label='{label_name}', band='{band}'")
+    
+    # Debug: show what's in the table
+    print(f"Available labels in Excel: {table['label'].unique()}")
+    print(f"Available bands in Excel: {table['Band'].unique()}")
 
     try: 
         label_info = table[
-            (table['label'].str.lower() == label.lower()) & 
-            (table['Band'].str.lower() == band.lower())
+            (table['label'].str.strip().str.lower() == label_name.lower()) & 
+            (table['Band'].str.strip().str.lower() == band.lower())
         ]
     except KeyError as e:
-        print("Error: Cannot find 'label' in csv file")
+        print(f"Error: Cannot find required columns in Excel file: {e}")
+        print(f"Available columns: {table.columns.tolist()}")
         exit(1)
 
     if not label_info.empty:
+        print(f"Found match! Processing {label_name}_{band}")
         distance = label_info.iloc[0]['current_dist']
         res = label_info.iloc[0]['res']
         pixscale = label_info.iloc[0]['pixscale']
@@ -70,18 +92,27 @@ def getInfo(label, csv_path):
         Band = label_info.iloc[0]['Band']
         Instr = label_info.iloc[0]['INSTR']
 
+        try: 
+            sSFR = label_info.iloc[0]['SSFR']
+            inclination = label_info.iloc[0]['Inclination Angle']
+        except: 
+            sSFR = np.nan
+            inclination = np.nan
+
         if bool(Rem_sources):
             MJysr = getMJysr(Band, Instr)
         else:
             MJysr = np.nan #not needed
 
-        return distance, res, pixscale, MJysr, Band, min_power, max_power, bool(Rem_sources)
+        return distance, res, pixscale, MJysr, Band, min_power, max_power, bool(Rem_sources), sSFR, inclination
     
     else: 
-        print("Image not found in csv!")
+        print(f"ERROR: Image '{label_name}' with band '{band}' not found in Excel file!")
+        print(f"Check that your Excel has an entry with label='{label_name}' and Band='{band}'")
+        return None
 
 
-def setUpGalaxy(base_dir, label_folder_path,  label, distance_Mpc, res, pixscale, param_file_path, noise_min, flatten_perc, min_intensity): 
+def setUpGalaxy(base_dir, label_folder_path,  label, distance_Mpc, res, pixscale, param_file_path, noise_min, flatten_perc, min_intensity, sSFR, Inclination): 
 
     """
     Constructs a filament map object for each scale decomposed image of a label/celestial object. 
@@ -112,7 +143,7 @@ def setUpGalaxy(base_dir, label_folder_path,  label, distance_Mpc, res, pixscale
 
         if(fits_file.endswith(".fits")): 
             ScalePix = pixscale * 4.848 * distance_Mpc  #convert to parcecs per pixel
-            filMap = FilamentMap.FilamentMap(ScalePix, base_dir, label_folder_path, fits_file, label, param_file_path, flatten_perc, min_intensity) #create object
+            filMap = FilamentMap.FilamentMap(ScalePix, base_dir, label_folder_path, fits_file, label, param_file_path, flatten_perc, min_intensity, sSFR, Inclination) #create object
             filMap.setBlockData() #set the blocked data
             filMap.setBkgSubDivRMS(noise_min) #set the background subtracted and noise divided data
             FilamentMapList.append(filMap) 
@@ -162,60 +193,6 @@ def CreateSNRPlot(FilamentMapList, base_dir, percentile, write = False):
     plt.close()
 
 
-def createDirectoryStructure(base_directory, csv_path): 
-    """
-    Creates the directory structure as described in the ReadME. Subfolders are created based on images present in the "OriginalImages" folder. 
-
-    Parameters:
-    - base_directory (str): Path to the base directory for which all subfolders and files will be held.
-    - csv_path (str): Path to the CSV file containing image information.
-    """
-
-    folder_path = os.path.join(base_directory, "OriginalImages")
-    os.makedirs(base_directory, exist_ok=True)  # Ensure the root directory exists
-    figures_folder = os.path.join(base_directory, "Figures")  # Make the figures folder
-    os.makedirs(figures_folder, exist_ok=True)
-
-    # Iterate through all FITS files in the folder and create the needed subfolders
-    for filename in os.listdir(folder_path):
-
-        if filename.endswith('.fits'):
-            # Extract the label including the first underscore but not the second
-            match = re.match(r"(.*?_.+?)_.*?\.fits", filename)
-
-            if match:
-                label = match.group(1)
-                # Create the galaxy folder
-                label_folder = os.path.join(base_directory, label)
-                os.makedirs(label_folder, exist_ok=True)
-
-                # Create subfolders
-                subfolders = [
-                    "CDD", "Composites", "BlockedPng", "SyntheticMap", "SoaxOutput", "BkgSubDivRMS", "Source_Removal"
-                ]
-                _, _, _, _, _, min_power, max_power, _ = getInfo(label, csv_path)  # Get relevant information for the image
-
-                soax_subfolders = []
-                for i in range(min_power, max_power + 1):
-                    soax_subfolders.append(str(2**i).lstrip("0") + "pc")
-
-                for subfolder in subfolders:
-                    subfolder_path = os.path.join(label_folder, subfolder)
-                    os.makedirs(subfolder_path, exist_ok=True)
-
-                    # Create SOAXOutput subfolders
-                    if subfolder == "SoaxOutput":
-                        for soax_subfolder in soax_subfolders:
-                            os.makedirs(os.path.join(subfolder_path, soax_subfolder), exist_ok=True)
-                            
-                    if subfolder == "Source_Removal":
-                        cdd_pix_path = os.path.join(subfolder_path, "CDD_Pix")
-                        os.makedirs(cdd_pix_path, exist_ok=True)
-                        table_path = os.path.join(subfolder_path, "Source_Tables")
-                        os.makedirs(table_path, exist_ok=True)
-
-                print(f"Directory structure created for galaxy: {label}")
-
 
 def clearAllFiles(base_directory, csv_path, param_file_path):
 
@@ -251,66 +228,149 @@ def clearAllFiles(base_directory, csv_path, param_file_path):
     print("All files cleared from subdirectories of the directory structure.")
 
 
-
-def renameFitsFiles(base_dir, csv_path):
-
+def createDirectoryStructure(base_directory, csv_path, ID_set=False):
     """
-    Renames FITS files based on information from an Excel file. Forces naming convention discussed in the ReadMe. 
+    Creates the directory structure as described in the ReadME. Subfolders are created based on images present in the "OriginalImages" folder.
+
+    Parameters:
+    - base_directory (str): Path to the base directory for which all subfolders and files will be held.
+    - csv_path (str): Path to the CSV file containing image information.
+    - ID_set (bool): If True, an image ID is extracted from the filename as the string after the final
+                     underscore (before the extension) and appended to the galaxy label folder name.
+                     If False, behaviour is identical to the original.
+    """
+
+    folder_path = os.path.join(base_directory, "OriginalImages")
+    os.makedirs(base_directory, exist_ok=True)
+    figures_folder = os.path.join(base_directory, "Figures")
+    os.makedirs(figures_folder, exist_ok=True)
+
+    for filename in os.listdir(folder_path):
+
+        if filename.endswith('.fits'):
+            match = re.match(r"(.+?)_(F\d+[A-Z])[_.]", filename)
+
+            if match:
+                label_name = match.group(1)
+                band       = match.group(2)
+                label      = f"{label_name}_{band}"
+
+                # Extract image ID if requested
+                if ID_set:
+                    stem     = os.path.splitext(filename)[0]   # strip .fits
+                    image_id = stem.rsplit('_', 1)[-1]          # last token
+                    folder_label = f"{label}_{image_id}"
+                else:
+                    folder_label = label
+
+                print(f"Processing file: {filename}")
+                print(f"Extracted label: {label}" + (f"  ID: {image_id}" if ID_set else ""))
+
+                # Create the galaxy folder (with or without ID suffix)
+                label_folder = os.path.join(base_directory, folder_label)
+                os.makedirs(label_folder, exist_ok=True)
+
+                info_result = getInfo(label, csv_path)
+
+                if info_result is None:
+                    print(f"Warning: Skipping {label} - not found in Excel file")
+                    continue
+
+                _, _, _, _, _, min_power, max_power, _, _, _ = info_result
+
+                subfolders = [
+                    "CDD", "Composites", "BlockedPng", "SyntheticMap",
+                    "SoaxOutput", "BkgSubDivRMS", "Source_Removal"
+                ]
+
+                soax_subfolders = [
+                    str(2**i) + "pc"
+                    for i in range(int(min_power), int(max_power) + 1)
+                ]
+
+                for subfolder in subfolders:
+                    subfolder_path = os.path.join(label_folder, subfolder)
+                    os.makedirs(subfolder_path, exist_ok=True)
+
+                    if subfolder == "SoaxOutput":
+                        for soax_subfolder in soax_subfolders:
+                            os.makedirs(os.path.join(subfolder_path, soax_subfolder), exist_ok=True)
+
+                    if subfolder == "Source_Removal":
+                        os.makedirs(os.path.join(subfolder_path, "CDD_Pix"),        exist_ok=True)
+                        os.makedirs(os.path.join(subfolder_path, "Source_Tables"),  exist_ok=True)
+
+                print(f"Directory structure created for: {folder_label}\n")
+            else:
+                print(f"Warning: Could not parse filename: {filename}")
+
+
+def renameFitsFiles(base_dir, csv_path, ID_set=False):
+    """
+    Renames FITS files based on information from an Excel file. Forces naming
+    convention discussed in the ReadMe.
 
     Parameters:
     - base_dir (str): Path to the base directory containing the FITS files.
     - csv_path (str): Path to the Excel file containing image information.
+    - ID_set (bool): If True, the image ID (string after the final underscore,
+                     before the extension) is preserved and appended to the new
+                     filename.  If False, behaviour is identical to the original.
     """
 
-    # Load the Excel file into a DataFrame
     table = pd.read_excel(csv_path)
-    
     fits_file_folder_path = os.path.join(base_dir, "OriginalImages")
 
     for fits_file in os.listdir(fits_file_folder_path):
-        # Construct the full path to the current FITS file
         full_file_path = os.path.join(fits_file_folder_path, fits_file)
+        filename       = os.path.basename(fits_file)
 
-        # Extract the galaxy name from the FITS filename (assumes galaxy is the first part before the underscore)
-        filename = os.path.basename(fits_file)
-
-        # Match the pattern to extract label and band
         match = re.match(r"([^_]+)_([^_]+)", filename)
-        
-        if match:
-            label = match.group(1)  # Extract label (before the first underscore)
-            band = match.group(2)   # Extract band (after the first underscore)
 
-        try: 
+        if not match:
+            print(f"Could not extract galaxy name from {filename}")
+            continue
+
+        label = match.group(1)
+        band  = match.group(2)
+
+        # Extract image ID if requested
+        if ID_set:
+            stem     = os.path.splitext(filename)[0]
+            image_id = stem.rsplit('_', 1)[-1]
+        else:
+            image_id = None
+
+        try:
             label_info = table[
-                (table['label'].str.lower() == label.lower()) & 
-                (table['Band'].str.lower() == band.lower())]
-        except KeyError as e:
-                print("Error: Cannot find 'label' in csv file")
-                exit(1)
-    
+                (table['label'].str.lower() == label.lower()) &
+                (table['Band'].str.lower()  == band.lower())
+            ]
+        except KeyError:
+            print("Error: Cannot find 'label' in csv file")
+            exit(1)
+
         if not label_info.empty:
             telescope = label_info.iloc[0]['Telescope']
-            band = label_info.iloc[0]['Band']
-            type = label_info.iloc[0]['Image_Type']
-            
-            # Check if 'starsub' is in the original filename
+            band      = label_info.iloc[0]['Band']
+            img_type  = label_info.iloc[0]['Image_Type']
+
+            # Build base new name
             if "starsub" in filename.lower():
-                new_filename = f"{label}_{band}_{telescope}_{type}_starsub.fits"
+                base_name = f"{label}_{band}_{telescope}_{img_type}_starsub"
             else:
-                new_filename = f"{label}_{band}_{telescope}_{type}.fits"
+                base_name = f"{label}_{band}_{telescope}_{img_type}"
+
+            # Append ID if present
+            if image_id:
+                new_filename = f"{base_name}_{image_id}.fits"
+            else:
+                new_filename = f"{base_name}.fits"
 
             new_filepath = os.path.join(fits_file_folder_path, new_filename)
-
-            # Rename the file (ensure the full paths are used)
             os.rename(full_file_path, new_filepath)
             print(f"Renamed {filename} to {new_filename}")
         else:
-            print(f"Nnot found in Excel file.")
-    else:
-        print(f"Could not extract galaxy name from {filename}")
+            print(f"Not found in Excel file: {label} / {band}")
 
     print("Renaming process completed.")
-
-
-

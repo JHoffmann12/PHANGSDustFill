@@ -71,7 +71,7 @@ def crossmatch_fits_tables(table1_path, table2_path, table3_path, sep_arcsec=0.2
         # Add any other relevant columns like 'mag', 'err', etc.
     ]
 
-    # --- 1. Read Tables and Prepare for Analysis ---
+    # 1. Read Tables and Prepare for Analysis
     try:
         table1 = Table.read(table1_path)
         table2 = Table.read(table2_path)
@@ -105,7 +105,7 @@ def crossmatch_fits_tables(table1_path, table2_path, table3_path, sep_arcsec=0.2
     # Create SkyCoord objects for all sources for spatial matching
     all_coords = SkyCoord(ra=all_sources['ra'] * u.deg, dec=all_sources['dec'] * u.deg)
 
-    # --- 2. Find Spatially Connected Components ---
+    # 2. Find Spatially Connected Components
     # Use search_around_sky to find all pairs of sources within the specified separation.
     # We search the combined catalog against itself to identify all potential matches.
     idx_all1, idx_all2, d2d_all, _ = all_coords.search_around_sky(all_coords, seplimit=sep_arcsec * u.arcsec)
@@ -126,7 +126,7 @@ def crossmatch_fits_tables(table1_path, table2_path, table3_path, sep_arcsec=0.2
     n_components, labels = connected_components(adj_matrix, directed=False)
     all_sources['component_id'] = labels # Assign the component ID to each source
 
-    # --- 3. Categorize Components into Match Types ---
+    # 3. Categorize Components into Match Types
     # Initialize lists to store components based on their match type
     triple_components = []
     double_12_components = [] # Sources from table1 and table2
@@ -159,7 +159,7 @@ def crossmatch_fits_tables(table1_path, table2_path, table3_path, sep_arcsec=0.2
         # only 3 distinct origins) are handled by the `get_props_from_source`
         # function below which takes the first found source as a representative.
 
-    # --- 4. Consolidate Results into a Single Output Table ---
+    # 4. Consolidate Results into a Single Output Table
     final_rows = []
 
     # Helper function to extract properties from a source or fill with NaN
@@ -401,7 +401,6 @@ def write_ds9_region_file(table, filename, radius_arcsec=1.0):
             f.write(f'circle({ra},{dec},{radius_arcsec}") # color={color} text={{{label}}}\n')
 
 def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixscale):
-
     source_rem_dir = os.path.join(label_folder_path, "Source_Removal")
 
     cdd_dir = os.path.join(source_rem_dir, "CDD_Pix" )
@@ -473,13 +472,10 @@ def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixs
 
     image_path = orig_image
 
-
     
     with fits.open(image_path) as hdul:
             sci_hdu = hdul['SCI'] if 'SCI' in hdul else hdul[0]
             header = sci_hdu.header
-
-    print(image_path)
 
 
     #for subsections that are possible using phangs_JWST_CDDfs.ipynb we need to do more special treatment when image is read below (not yet implemented)
@@ -491,7 +487,6 @@ def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixs
     bands=[bandstr.lower()]
     for band in bands:
 
-    #----------------------------------------------------
     # Aperture correction for HST bands:
     # according to the ReadMe file:
     # https://app.box.com/s/6e3j2sx60afwshwiaijn5qrcnet6e08l
@@ -511,7 +506,6 @@ def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixs
     # Aperture MIRI 50% encircle energy:
     # https://jwst-docs.stsci.edu/jwst-mid-infrared-instrument/miri-performance/miri-point-spread-functions
     # Latest updates: original 13 Nov 2018  ?
-    #----------------------------------------------------
 
         if band=='f200w':
             ac=-0.63
