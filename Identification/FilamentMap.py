@@ -1,6 +1,7 @@
 #Filament map class to produce skeletonized filament maps of astrophysical images
 
-#imports 
+#imports
+import logging
 from astropy.nddata.utils import Cutout2D
 from astropy.stats import SigmaClip, sigma_clipped_stats
 from astropy.table import Table, QTable
@@ -55,6 +56,8 @@ import sys
 
 
 matplotlib.use('Agg')
+
+logger = logging.getLogger(__name__)
 
 
 class FilamentMap:
@@ -210,7 +213,7 @@ class FilamentMap:
             if scale in fits_file:
                 return scale
 
-        print("Invalid FITS file: Scale not recognized. Please add scale to _getScale method.")
+        logger.warning("Scale not recognized in '%s'. Add the scale string to _getScale.", fits_file)
         return None
 
 
@@ -330,8 +333,9 @@ class FilamentMap:
             #set box size
             box_size = round(10.*self.Scalepix/(2.*blockFactor))*2+1
             if(box_size < .02* np.min((np.shape(data)[0], np.shape(data)[1]))):
-                print("Correcting box size")
-                box_size = int(.02*np.min((np.shape(data)[0], np.shape(data)[1]))) * 2 + 1 #Make box 2% of smaller image dimension.Appears to work well
+                # Box too small relative to the image; clamp to 2% of the shorter dimension
+                box_size = int(.02*np.min((np.shape(data)[0], np.shape(data)[1]))) * 2 + 1
+                logger.debug("Background box size clamped to %d px", box_size)
 
             bkg = Background2D(data, box_size=box_size, coverage_mask = mask, exclude_percentile = 10, filter_size=(3,3), bkg_estimator=bkg_estimator) #Very different RMS with mask. Minimum noise is MUCH larger. 
 
@@ -350,7 +354,8 @@ class FilamentMap:
             self.NoiseMap = noise
 
         except ValueError:
-            print("Error: Majrity Black pixels, cannot use photutils to enhance image")
+            # Majority of pixels are blank; photutils background estimation fails
+            logger.warning("Majority blank pixels in %s — skipping background subtraction", self.FitsFile)
             self.BkgSubDivRMSMap = self.BlockData
 
 
@@ -382,8 +387,8 @@ class FilamentMap:
         cv2.imwrite(save_png_path, pngData)
 
         if(write_fits):
-            print('saving bkg sub as fits')
             out_path = Path(f"{self.BaseDir}/{self.Label}/BkgSubDivRMS/{self.FitsFile}_BkgSubDivRMS.fits")
+            logger.debug("Saving BkgSubDivRMS FITS: %s", out_path)
             hdu = fits.PrimaryHDU(self.BkgSubDivRMSMap, header=self.BlockHeader)
             hdu.writeto(out_path, overwrite=True)
 
@@ -396,8 +401,7 @@ class FilamentMap:
             
         if(self.BlockFactor !=0):
 
-            #fix the blocked header
-            print(f"Block factor: {self.BlockFactor} and Scale: {self.Scale}")
+            logger.debug("Block factor: %s, scale: %s", self.BlockFactor, self.Scale)
             try: 
                 self.BlockHeader['CDELT1'] = (self.OrigHeader['CDELT1']) * self.BlockFactor
                 self.BlockHeader['CDELT2'] = (self.OrigHeader['CDELT2']) * self.BlockFactor
@@ -497,10 +501,10 @@ class FilamentMap:
         stretch_stop = 2.5
 
 
-        #adjust soax length param to account for blocking
+        # Scale down minimum snake length by √BlockFactor×4 to preserve physical length after blocking
         new_length = round(min_snake_length_ss - ((math.sqrt(self.BlockFactor))*4))
         self.updateMinimumSnakeLength(new_length, min_fg_int)
-        print('Starting Threads')
+        logger.info("Starting SOAX threads (min_snake_length=%d)", new_length)
 
 
         #begin 5 threads to speed up soax
@@ -519,7 +523,7 @@ class FilamentMap:
         for t in threads:
             t.join()
 
-        print("Threads done")
+        logger.info("All SOAX threads complete")
 
         
 
@@ -543,21 +547,22 @@ class FilamentMap:
         batch = batch_path
         output_dir = Path(f"{self.BaseDir}/{self.Label}/SOAXOutput/{self.Scale}")
 
-        try: 
-            assert(os.path.isdir(output_dir))
-            assert( os.path.isfile(self.ParamFile))
-            assert(os.path.isfile(input_image))
-        except AssertionError as e: 
-            print('Error: Assertions failed, a faulty path exists!')
+        try:
+            assert os.path.isdir(output_dir),  f"SOAX output dir missing: {output_dir}"
+            assert os.path.isfile(self.ParamFile), f"Param file missing: {self.ParamFile}"
+            assert os.path.isfile(input_image), f"Blocked PNG missing: {input_image}"
+        except AssertionError as e:
+            logger.error("Path assertion failed: %s", e)
+            return
             
-        print("starting Soax")
-        cmdString = f'"{batch}" soax -i "{input_image}" -p "{self.ParamFile}" -s "{output_dir}" --ridge {ridge_start} 0.0075 {ridge_stop} --stretch {stretch_start} 0.5 {stretch_stop}' 
+        logger.debug("Running SOAX (ridge %.4f–%.4f)", ridge_start, ridge_stop)
+        cmdString = f'"{batch}" soax -i "{input_image}" -p "{self.ParamFile}" -s "{output_dir}" --ridge {ridge_start} 0.0075 {ridge_stop} --stretch {stretch_start} 0.5 {stretch_stop}'
         with open(os.devnull, 'w') as devnull:
-            subprocess.run(cmdString, shell=True, stdout=devnull, stderr=devnull) #supress output from threads because its garbage
+            subprocess.run(cmdString, shell=True, stdout=devnull, stderr=devnull)
 
-        self._convertSoaxToFits(output_dir, ridge_start) #ridge_start can be used to specify the two SOAX files created by one process
-
-        print("Soax converted to Fits, Success!")
+        # ridge_start is embedded in SOAX output filenames, used to match results to this thread
+        self._convertSoaxToFits(output_dir, ridge_start)
+        logger.debug("SOAX → FITS conversion complete (ridge %.4f)", ridge_start)
 
 
     def updateMinimumSnakeLength(self, new_length, min_fg_int):
@@ -624,7 +629,7 @@ class FilamentMap:
                 
         expected_header = "s p x y z fg_int bg_int"
 
-        print(f' Begenning Soax txt to Fits File conversion on {result_file}')
+        logger.debug("Converting SOAX txt → FITS: %s", result_file)
         assert(os.path.isfile(result_file))
         
         # Read the content of the input file
@@ -645,7 +650,7 @@ class FilamentMap:
                 break
 
         if header_start_index is None:
-            print('HEADER NOT FOUND!')
+            logger.warning("SOAX header line not found in %s — skipping file", result_file)
             return np.nan, np.nan
         
         # Extract header and data, after identifying the header start index
@@ -658,18 +663,16 @@ class FilamentMap:
         # Convert data into a DataFrame, explicitly specifying the correct columns
         df = pd.DataFrame(data, columns=expected_header.split())
 
-        #get dictionary for filaments
+        # Build {snake_id: [(x, y), ...]} dict; skip comment rows marked with '#' in the 's' column.
+        # groupby is substantially faster than iterrows for large SOAX output files.
         filament_dict = {}
-
-        # Grouping the coordinates
-        for index, row in df.iterrows():
-            s_value = row['s']
-            if "#" not in s_value:
-                s_value = int(s_value)   
-                if s_value not in filament_dict:
-                    filament_dict[s_value] = []  # Initialize the list for this s value
-                # Append the (x, y) coordinates as a tuple
-                filament_dict[s_value].append((round(float(row['x'])), round(float(row['y']))))
+        df_data = df[~df['s'].str.contains('#')].copy()
+        df_data['s'] = df_data['s'].astype(int)
+        for s_val, group in df_data.groupby('s'):
+            filament_dict[s_val] = [
+                (round(float(x)), round(float(y)))
+                for x, y in zip(group['x'], group['y'])
+            ]
 
         self._interpolate(filament_dict, interpolate_path)
 
@@ -767,10 +770,10 @@ class FilamentMap:
                     if header is None:
                         header = hdul[0].header
                 else:
-                    print(f"Skipping empty data in file: {file}")
+                    logger.warning("Skipping empty data in FITS file: %s", file)
 
         if not images:
-            print("No images were loaded. Exiting function.")
+            logger.error("No SOAX FITS images found for %s at scale %s", self.Label, self.Scale)
             return
 
         # Stack images and count the presence of each pixel across files
@@ -779,13 +782,11 @@ class FilamentMap:
 
         # Check if composite_data is an array or a scalar
         if np.isscalar(composite_data) or composite_data.size == 0:
-            print("Error: composite_data is invalid or empty. Exiting function.")
+            logger.error("Composite data is invalid or empty for %s at scale %s", self.Label, self.Scale)
             return
-        else:
-            print("Composite data array created successfully.")
 
         max_presence = len(images)
-        print(f"Total number of images: {max_presence}")
+        logger.info("Composite built from %d SOAX images for %s at scale %s", max_presence, self.Label, self.Scale)
 
         # Normalize composite data to the range [0, 255] for grayscale representation
         composite_data = (composite_data / max_presence * 255).astype(np.uint8)
@@ -794,11 +795,11 @@ class FilamentMap:
         self.ProbabilityMap = composite_data
 
         # Save the grayscale composite as FITS? 
-        if write_fits: 
+        if write_fits:
             output_fits_path = os.path.join(output_directory, str(output_name) + ".fits")
             hdu = fits.PrimaryHDU(data=composite_data, header=header)
             hdu.writeto(output_fits_path, overwrite=True)
-            print(f"Composite image saved as FITS")
+            logger.debug("Composite saved: %s", output_fits_path)
 
 
 
@@ -1173,7 +1174,7 @@ class FilamentMap:
                 data_new = self.reprojectWrapper(data, header, self.BlockHeader, self.BlockData) #use reprojected down data
                 return data_new #return region file reprojected into original file shape
             
-        print(f'could not find file in {dir}')
+        logger.warning("No region file found for '%s' in %s — returning zero array", self.Label, dir)
         return np.zeros(self.OrigData.shape)
 
 
@@ -1198,7 +1199,7 @@ class FilamentMap:
         region_values = data_new[mask > 0]
 
         if region_values.size == 0:
-            print("Warning: mask covers no valid pixels")
+            logger.warning("Region mask covers no valid pixels")
             return -1
 
         # Find most common region
@@ -1308,10 +1309,12 @@ class FilamentMap:
             min_area = int(8*(16/self.Scalepix)**2)
             imgNew = np.zeros_like(self.OrigData, dtype=float)
 
+        # min_skel_length: minimum centerline length in pixels, set to 4× the resolution element
         min_skel_length = int(4*(16/self.Scalepix))
-        print(f'min_area={min_area}, min_skel_length={min_skel_length}')
+        logger.info("Computed min_area=%d, min_skel_length=%d for %s", min_area, min_skel_length, self.FitsFile)
 
-        min_area = 20 #change later 
+        # TODO: replace 20 with the physically-motivated min_area once threshold is validated
+        min_area = 20
         segment_map  = detect_sources(rep_centers, threshold=0.5, npixels=min_area)
         segm_deblend = deblend_sources(rep_centers, segment_map, npixels=min_area,
                                     nlevels=32, contrast=0.001, progress_bar=False)
@@ -1322,7 +1325,7 @@ class FilamentMap:
             label_val += 10
 
         imgNew = np.rint(imgNew).astype(int)
-        print(f'Initial detection — max label: {label_val}, filaments: {label_val // 10}')
+        logger.info("Initial detection — max label: %d, filaments: %d", label_val, label_val // 10)
 
         segment_info_reprojected = {}
         skipped = 0
@@ -1332,22 +1335,27 @@ class FilamentMap:
             if not np.any(white_mask):
                 continue
 
+            # Fast area pre-filter: skip blobs too small to yield a valid skeleton (avoids costly skeletonize)
             if np.sum(white_mask) < min_area * 2:
                 skipped += 1
                 continue
 
+            # Pre-junction skeleton length check on the full blob
             quick_skel = skeletonize(white_mask.astype(bool))
             if np.sum(quick_skel) < min_skel_length:
                 skipped += 1
                 continue
 
+            # Remove junction pixels so intersecting filaments become separate segments
             chopped_float = self.removeJunctions(white_mask).astype(float)
 
             try:
+                # Re-detect connected regions after junction removal; threshold=0.5 on binary {0,1} input
                 seg_map    = detect_sources(chopped_float, threshold=0.5, npixels=min_area)
                 sub_labels = seg_map.labels
                 seg_data   = seg_map.data
             except Exception:
+                # detect_sources returns None when no regions remain → .labels raises AttributeError
                 skipped += 1
                 continue
 
@@ -1365,7 +1373,7 @@ class FilamentMap:
                 imgNew[seg_mask] = label_val
                 label_val += 10
 
-        print(f'After junction removal — {len(segment_info_reprojected)} segments kept, {skipped} skipped')
+        logger.info("After junction removal — %d segments kept, %d skipped", len(segment_info_reprojected), skipped)
 
         color_map_rgb = np.zeros((*imgNew.shape, 3), dtype=np.uint8)
         rng = np.random.default_rng()
@@ -1377,7 +1385,7 @@ class FilamentMap:
         base = Path(r"C:/Users/jhoffm72/Documents/FilPHANGS")
         png_path = base / f"{self.FitsFile}_filamentColorMap.png"
         Image.fromarray(color_map_rgb, mode='RGB').save(png_path)
-        print(f'Color map saved to: {png_path}')
+        logger.debug("Filament color map saved: %s", png_path)
 
         return segment_info_reprojected, Scale
 
@@ -1461,14 +1469,13 @@ class FilamentMap:
 
         # Use PHANGS alphaCO
         if use_dynamic_alphaCO is not None:
-            print(f'Using dynamic alphaCO')
             dir_path = use_dynamic_alphaCO
             found_alphaCO = False
 
             for file in os.listdir(dir_path):
-                galaxy = self.Label.split("_")[0]  # Get first part of label
+                galaxy = self.Label.split("_")[0]
                 if galaxy.lower() in file.lower() and alphaCO_tag.lower() in file.lower():
-                    print("Matched alphaCO map!")
+                    logger.info("Using dynamic alphaCO map: %s", file)
                     fits_path = os.path.join(dir_path, file)
 
                     with fits.open(fits_path, ignore_missing=True) as hdul:
@@ -1492,9 +1499,9 @@ class FilamentMap:
                     # (save mask as 0/1 integers so it’s more readable)
 
                     if n_nans == 0:
-                        print("No NaNs detected in Molecular_Mass.")
+                        logger.debug("No NaNs in Molecular_Mass.")
                     else:
-                        print(f"Detected {n_nans} NaN pixel(s) in Molecular_Mass. Replacing with 5.5 * I_CO__2_1_16pc where possible...")
+                        logger.warning("%d NaN pixel(s) in Molecular_Mass — replacing with 5.5×I_CO where finite", n_nans)
 
                         # candidate replacement array
                         replacement = 5.5 * I_CO__2_1_16pc
@@ -1513,17 +1520,15 @@ class FilamentMap:
                         n_replaced = np.count_nonzero(can_replace)
                         n_remaining = np.count_nonzero(cannot_replace)
 
-                        print(f"Replaced {n_replaced} pixel(s).")
+                        logger.info("Replaced %d NaN pixel(s) in Molecular_Mass.", n_replaced)
                         if n_remaining:
-                            print(f"{n_remaining} pixel(s) remain NaN because replacement values were not finite.")
-                        else:
-                            print("No remaining NaNs; all NaNs successfully replaced.")
+                            logger.warning("%d pixel(s) remain NaN — replacement values not finite.", n_remaining)
                     found_alphaCO = True
                     break
 
             if not found_alphaCO:
-                print(f'Could not find {alphaCO_tag} alphaCO file for {self.Label}')
-                Molecular_Mass = 5.5 * I_CO__2_1_16pc  # Default value
+                logger.warning("No alphaCO file matching '%s' for %s — using constant 5.5", alphaCO_tag, self.Label)
+                Molecular_Mass = 5.5 * I_CO__2_1_16pc
         else:
             Molecular_Mass = 5.5 * I_CO__2_1_16pc  # Default value
 
@@ -1537,7 +1542,7 @@ class FilamentMap:
         return Molecular_Mass
 
     def convertToCSV(self, Scale, tag, LineDensityMass, SurfaceDensityMass, segment_info_reprojected):
-        print('converting to csv data')
+        logger.info("Converting %d filaments to CSV at scale %s", len(segment_info_reprojected), Scale)
         csv_data = {}
 
         Line_Density = []
@@ -1548,19 +1553,19 @@ class FilamentMap:
         label = []
         
         for fil_id, pix_info in segment_info_reprojected.items():
-            mass_sum = []
             fil_length = pix_info[1]
             if self.BlockFactor != 0:
-                fil_length = fil_length * self.BlockFactor * self.Scalepix  #adjust length for blocking
+                fil_length = fil_length * self.BlockFactor * self.Scalepix
             else:
-                fil_length = fil_length * self.Scalepix  #adjust length for blocking
+                fil_length = fil_length * self.Scalepix
             img = np.zeros_like(LineDensityMass)
 
-            for values in pix_info[0]:
-                x = values[0]
-                y = values[1]
-                mass_sum.append(LineDensityMass[y, x]) #only center-line values considered in mass sum
-                img[y, x] = LineDensityMass[y, x]
+            # Vectorized centerline mass extraction (pix_info[0] is a list of (x, y) tuples)
+            coords = np.array(pix_info[0])         # shape (n, 2): col 0 = x, col 1 = y
+            xs, ys = coords[:, 0], coords[:, 1]
+            mass_vals = LineDensityMass[ys, xs]    # only centerline pixels contribute to mass
+            mass_sum = mass_vals.tolist()
+            img[ys, xs] = mass_vals
 
             img = img > 0
             curvature_img = skeletonize(img) #use centerline coordinates for curvature
@@ -1585,8 +1590,8 @@ class FilamentMap:
         csv_data[f'Regions_{Scale}'] = regions
         csv_data[f'Label_{Scale}'] = label
 
-        print(len(Line_Density), len(Lengths), len(Mass), len(curvatures), len(regions))
-        assert len(set([len(Line_Density), len(Lengths), len(Mass), len(curvatures), len(regions)])) == 1, "List length mismatch!"
+        assert len(set([len(Line_Density), len(Lengths), len(Mass), len(curvatures), len(regions)])) == 1, \
+            f"List length mismatch: {len(Line_Density)}, {len(Lengths)}, {len(Mass)}, {len(curvatures)}, {len(regions)}"
 
         df = pd.DataFrame(csv_data)
         # Save to CSV
@@ -1678,18 +1683,12 @@ class FilamentMap:
         - write_fits (bool): Save the map as a fits file
         """
 
-        # Load CDD Image
-        print('Begenning synthetic map production')
-        fits_path = os.path.join(self.BaseDir, self.Label)
-        fits_path = os.path.join(fits_path, "CDD")
-        
-        if not self.FitsFile.endswith(".fits"):
-            fits_path = os.path.join(fits_path, self.FitsFile + ".fits")
-        else: 
-            fits_path = os.path.join(fits_path, self.FitsFile)
+        logger.info("Beginning PSF synthetic map: %s", self.FitsFile)
+        fits_path = os.path.join(self.BaseDir, self.Label, "CDD")
+        fits_path = os.path.join(fits_path, self.FitsFile if self.FitsFile.endswith(".fits") else self.FitsFile + ".fits")
 
         with fits.open(fits_path, ignore_missing=True) as hdul:
-            data = np.array(hdul[0].data)  # Assuming the image data is in the primary HDU 
+            data = np.array(hdul[0].data)
             header = hdul[0].header
 
         data[np.isnan(data)] = 0
@@ -1702,14 +1701,15 @@ class FilamentMap:
         # hdu = fits.PrimaryHDU(coords_data, header=self.BlockHeader)
         # hdu.writeto(out_path, overwrite=True)
 
-        #Apply blocking to speed up PSF fitting
+        # Reproject to blocked resolution before PSF fitting to reduce computation
         if self.BlockFactor != 0:
-            data = self.reprojectWrapper(data, self.OrigHeader, self.BlockHeader, self.BlockData) 
+            data = self.reprojectWrapper(data, self.OrigHeader, self.BlockHeader, self.BlockData)
             coords_data = self.reprojectWrapper(coords_data, self.OrigHeader, self.BlockHeader, self.BlockData)
-        
-        rep_centers, coords_data = self.processFilamentCenters(coords_data) #rep_centers has intersects removed and is used for dictionary creation. 
 
-        model, tag, globalfactor,phot = self.runPSF(data, coords_data, header, write_fits)
+        # rep_centers: junction-free skeleton used for segmentation; coords_data: pre-junction skeleton used for PSF
+        rep_centers, coords_data = self.processFilamentCenters(coords_data)
+
+        model, tag, globalfactor, phot = self.runPSF(data, coords_data, header, write_fits)
 
         if extract_Properties: 
             #reproject this processed image back and detect filaments using photutils segmentation
@@ -1721,16 +1721,9 @@ class FilamentMap:
 
     def getSyntheticFilamentMapApprox(self, min_scale, alphaCO_tag, use_dynamic_alphaCO = None, use_Regions = None, extract_Properties = True, write_fits = True):
 
-
-        # Load CDD Image
-        print('Begenning synthetic map production')
-        fits_path = os.path.join(self.BaseDir, self.Label)
-        fits_path = os.path.join(fits_path, "CDD")
-        
-        if not self.FitsFile.endswith(".fits"):
-            fits_path = os.path.join(fits_path, self.FitsFile + ".fits")
-        else: 
-            fits_path = os.path.join(fits_path, self.FitsFile)
+        logger.info("Beginning LSE approximate synthetic map: %s", self.FitsFile)
+        fits_path = os.path.join(self.BaseDir, self.Label, "CDD")
+        fits_path = os.path.join(fits_path, self.FitsFile if self.FitsFile.endswith(".fits") else self.FitsFile + ".fits")
 
         with fits.open(fits_path, ignore_missing=True) as hdul:
             data = np.array(hdul[0].data)  # Assuming the image data is in the primary HDU 

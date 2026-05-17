@@ -1,8 +1,11 @@
 # Standard library
 import glob
 import importlib
+import logging
 import os
 import warnings
+
+logger = logging.getLogger(__name__)
 
 # Third-party libraries
 import matplotlib.pyplot as plt
@@ -620,8 +623,6 @@ def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixs
         datan = datan.astype(float)
 
         mask = (np.isinf(data) | np.isnan(data) | np.isinf(datan) | np.isnan(datan))
-
-        mask=((np.isinf(data)) | (np.isnan(data)) | (np.isinf(datan)) | (np.isnan(datan)))
         data=data*counts
         datan=datan*counts
 
@@ -782,7 +783,7 @@ def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixs
         #CONCENTRATION INDEX
         combined_catalog['CI_1pix3pix']=CI_1pix3pix
 
-        print(f'sources befoe: {len(combined_catalog)}')
+        logger.info("Sources before S/N cut: %d", len(combined_catalog))
 
 
         bkg_ratio_path = os.path.join(source_rem_dir, '_CDDfs'+str(4).rjust(4, '0')+'BKGDRATIO.fits') #4pix bkg ratio
@@ -796,12 +797,8 @@ def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixs
         # bkg_thresh = np.percentile(bkg_ratio_img, 97)
 
         s2ncut_combined_catalog = combined_catalog[((CI_1pix3pix <= 1.2) & (aper_stats_2_bkg_ratio.max >= 2)) | ((phot_1['aperture_sum'] > np.percentile(phot_1['aperture_sum'], 97)) & (CI_1pix3pix <= 1.9))] #why 97? #((CI_1pix3pix <= 1.6) & (aper_stats_2_bkg_ratio.max >= 1.5))
-        print(f'median of max is: {np.median(aper_stats_2_bkg_ratio.max)}')
-
-        print(f'sources after: {len( s2ncut_combined_catalog)}')
-    
-
-        print(len(s2ncut_combined_catalog))
+        logger.debug("Median of bkg ratio max: %.4f", np.median(aper_stats_2_bkg_ratio.max))
+        logger.info("Sources after S/N cut: %d", len(s2ncut_combined_catalog))
 
         s2ncut_combined_catalog.write(os.path.join(source_rem_dir, 'CDDfs_sources_table_S2N.fits'), overwrite=True)
 
@@ -839,7 +836,7 @@ def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixs
         hdu = fits.PrimaryHDU(mask, header=header)
         hdu.writeto(mask_save_path, overwrite=True)
 
-        print(f"Mask saved to: {mask_save_path}")
+        logger.info("Source mask saved to: %s", mask_save_path)
         return mask_save_path
     
 
@@ -863,29 +860,26 @@ def CloudCleanCheck(image_path, mask_save_path, orig_image_path, label_folder_pa
     orig_img, orig_header = openFits(orig_image_path)
     
     count = 0
-    radius = 6 #freee to change
+    radius = 6
     mask = masked_sources.astype(bool)
     infilled_img = np.copy(source_removed_image)
 
     rows, cols = source_removed_image.shape
 
-    for i in range(rows):
-        for j in range(cols):
-            if mask[i, j]:
-                # Define local window boundaries
-                r0, r1 = max(0, i - radius), min(rows, i + radius + 1)
-                c0, c1 = max(0, j - radius), min(cols, j + radius + 1)
+    # Iterate only over masked (source) pixels rather than the full image grid
+    for i, j in np.argwhere(mask):
+        r0, r1 = max(0, i - radius), min(rows, i + radius + 1)
+        c0, c1 = max(0, j - radius), min(cols, j + radius + 1)
 
-                # Extract local region
-                window = source_removed_image[r0:r1, c0:c1]
+        window = source_removed_image[r0:r1, c0:c1]
+        local_mask = masked_sources[r0:r1, c0:c1]
 
-                # Infill with median of available neighbors
-                val1 = np.mean(window[masked_sources[r0:r1, c0:c1] == 0])
-                val2 = np.mean(window[masked_sources[r0:r1, c0:c1] == 1])
-                if np.abs(val2 - val1) > thresh*val1 or np.std(window[masked_sources[r0:r1, c0:c1] == 1]) > thresh: 
-                    non_src_vals = window[masked_sources[r0:r1, c0:c1] == 0]
-                    infilled_img[i, j] = np.median(non_src_vals)
-                    count+=1
+        val1 = np.mean(window[local_mask == 0])
+        val2 = np.mean(window[local_mask == 1])
+        if np.abs(val2 - val1) > thresh * val1 or np.std(window[local_mask == 1]) > thresh:
+            non_src_vals = window[local_mask == 0]
+            infilled_img[i, j] = np.median(non_src_vals)
+            count += 1
 
     save_path = os.path.join(label_folder_path, "Source_Removal")
     save_path = os.path.join(save_path, f"OriginalImageSourcesRemoved_MEDIAN_INFILL_{count}_Pix.fits")

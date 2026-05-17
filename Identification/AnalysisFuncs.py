@@ -1,15 +1,17 @@
+import logging
+
 from PIL import Image, ImageDraw
 import math
 import matplotlib.pyplot as plt
 import cv2
 import numpy as np
 import skimage.exposure as exposure
-import numpy as np
-import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from scipy.ndimage import generic_filter
 from scipy import ndimage
-import copy 
+import copy
+
+logger = logging.getLogger(__name__)
 
 
 def neighbours(x, y, image):
@@ -51,7 +53,8 @@ def getSkeletonIntersection(skeleton):
                 if neighbors in validIntersection:
                     intersections.append((y, x))
     
-    # Filter intersections to make sure we don't count them twice or ones that are very close together
+    # Deduplicate intersections: suppress any point within 10 pixels of an already-accepted one.
+    # O(n²) over intersection count, which is typically small (tens to low hundreds per image).
     filtered_intersections = []
     for point1 in intersections:
         add_point = True

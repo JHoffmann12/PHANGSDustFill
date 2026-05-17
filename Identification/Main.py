@@ -1,6 +1,7 @@
 #FilPHANGS Main script
 
-#imports 
+#imports
+import logging
 from pathlib import Path
 import FilamentMap
 import Modified_Constrained_Diffusion
@@ -16,6 +17,16 @@ from astropy.io import fits
 import cdd_pix
 import CloudClean
 matplotlib.use('Agg')
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(name)s] %(levelname)s: %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('filphangs.log', mode='a'),
+    ]
+)
+logger = logging.getLogger(__name__)
 
 if __name__ == "__main__":
 
@@ -77,7 +88,7 @@ if __name__ == "__main__":
 
             if Rem_sources:
                 if orig_image is None:
-                    print(f'Skipping: no FITS file found', flush=True)
+                    logger.warning('Skipping %s: no FITS file found in OriginalImages', label)
                     continue
                 
                 cdd_pix.decompose(label_folder_path, base_dir, label, numscales=3)

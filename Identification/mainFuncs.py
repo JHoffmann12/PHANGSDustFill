@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 import FilamentMap
 import matplotlib
@@ -9,9 +10,11 @@ import re
 from astropy.coordinates import EarthLocation
 from astropy.io import fits
 from astropy.table import Table
-import astropy.units as u  
+import astropy.units as u
 
 matplotlib.use('Agg')
+
+logger = logging.getLogger(__name__)
 
 def getMJysr(bandstr, inststr):
     if bandstr=='F770W': sigma_MJysr=0.11 # JWST Cycle 1 imaging 1-sigma surface brightness sensitivity from Lee+23 (JWST survey paper) with units of MJy/sr
@@ -45,12 +48,12 @@ def getInfo(label, csv_path):
     - max_power (float): maximum power of 2 for scale decomposition
     """
 
-    print(f'Label is {label}')
+    logger.info('Processing label: %s', label)
     
     # Check for any hidden characters or extra whitespace
     label_clean = label.strip()
     if label != label_clean:
-        print(f"Warning: Label had whitespace. Original: '{label}', Cleaned: '{label_clean}'")
+        logger.warning("Label had whitespace. Original: '%s', Cleaned: '%s'", label, label_clean)
         label = label_clean
     
     table = pd.read_excel(csv_path)
@@ -65,11 +68,10 @@ def getInfo(label, csv_path):
     band = parts[-1]
     label_name = "_".join(parts[:-1])
     
-    print(f"Searching for: label='{label_name}', band='{band}'")
+    logger.debug("Searching for: label='%s', band='%s'", label_name, band)
     
-    # Debug: show what's in the table
-    print(f"Available labels in Excel: {table['label'].unique()}")
-    print(f"Available bands in Excel: {table['Band'].unique()}")
+    logger.debug("Available labels in Excel: %s", table['label'].unique())
+    logger.debug("Available bands in Excel: %s", table['Band'].unique())
 
     try: 
         label_info = table[
@@ -77,12 +79,11 @@ def getInfo(label, csv_path):
             (table['Band'].str.strip().str.lower() == band.lower())
         ]
     except KeyError as e:
-        print(f"Error: Cannot find required columns in Excel file: {e}")
-        print(f"Available columns: {table.columns.tolist()}")
+        logger.error("Cannot find required columns in Excel file: %s. Available columns: %s", e, table.columns.tolist())
         exit(1)
 
     if not label_info.empty:
-        print(f"Found match! Processing {label_name}_{band}")
+        logger.info("Found match: %s_%s", label_name, band)
         distance = label_info.iloc[0]['current_dist']
         res = label_info.iloc[0]['res']
         pixscale = label_info.iloc[0]['pixscale']
@@ -107,8 +108,7 @@ def getInfo(label, csv_path):
         return distance, res, pixscale, MJysr, Band, min_power, max_power, bool(Rem_sources), sSFR, inclination
     
     else: 
-        print(f"ERROR: Image '{label_name}' with band '{band}' not found in Excel file!")
-        print(f"Check that your Excel has an entry with label='{label_name}' and Band='{band}'")
+        logger.error("Image '%s' with band '%s' not found in Excel file. Check label and Band columns.", label_name, band)
         return None
 
 
@@ -223,9 +223,9 @@ def clearAllFiles(base_directory, csv_path, param_file_path):
             # Check if the file is not the CSV or parameter file, and ensure it's not in the "originalImages" folder
             if file_path != csv_path and file_path != param_file_path:
                 os.remove(file_path)
-                print(f"Deleted file: {file_path}")
+                logger.debug("Deleted file: %s", file_path)
 
-    print("All files cleared from subdirectories of the directory structure.")
+    logger.info("All files cleared from subdirectories of the directory structure.")
 
 
 def createDirectoryStructure(base_directory, csv_path, ID_set=False):
@@ -263,8 +263,7 @@ def createDirectoryStructure(base_directory, csv_path, ID_set=False):
                 else:
                     folder_label = label
 
-                print(f"Processing file: {filename}")
-                print(f"Extracted label: {label}" + (f"  ID: {image_id}" if ID_set else ""))
+                logger.info("Processing file: %s (label=%s%s)", filename, label, f"  ID: {image_id}" if ID_set else "")
 
                 # Create the galaxy folder (with or without ID suffix)
                 label_folder = os.path.join(base_directory, folder_label)
@@ -273,7 +272,7 @@ def createDirectoryStructure(base_directory, csv_path, ID_set=False):
                 info_result = getInfo(label, csv_path)
 
                 if info_result is None:
-                    print(f"Warning: Skipping {label} - not found in Excel file")
+                    logger.warning("Skipping %s — not found in Excel file", label)
                     continue
 
                 _, _, _, _, _, min_power, max_power, _, _, _ = info_result
@@ -300,9 +299,9 @@ def createDirectoryStructure(base_directory, csv_path, ID_set=False):
                         os.makedirs(os.path.join(subfolder_path, "CDD_Pix"),        exist_ok=True)
                         os.makedirs(os.path.join(subfolder_path, "Source_Tables"),  exist_ok=True)
 
-                print(f"Directory structure created for: {folder_label}\n")
+                logger.info("Directory structure created for: %s", folder_label)
             else:
-                print(f"Warning: Could not parse filename: {filename}")
+                logger.warning("Could not parse filename: %s", filename)
 
 
 def renameFitsFiles(base_dir, csv_path, ID_set=False):
@@ -347,7 +346,7 @@ def renameFitsFiles(base_dir, csv_path, ID_set=False):
                 (table['Band'].str.lower()  == band.lower())
             ]
         except KeyError:
-            print("Error: Cannot find 'label' in csv file")
+            logger.error("Cannot find 'label' column in Excel file")
             exit(1)
 
         if not label_info.empty:
@@ -369,8 +368,8 @@ def renameFitsFiles(base_dir, csv_path, ID_set=False):
 
             new_filepath = os.path.join(fits_file_folder_path, new_filename)
             os.rename(full_file_path, new_filepath)
-            print(f"Renamed {filename} to {new_filename}")
+            logger.info("Renamed %s → %s", filename, new_filename)
         else:
-            print(f"Not found in Excel file: {label} / {band}")
+            logger.warning("Not found in Excel file: %s / %s", label, band)
 
-    print("Renaming process completed.")
+    logger.info("Renaming process completed.")
