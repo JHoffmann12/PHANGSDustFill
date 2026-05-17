@@ -1,56 +1,176 @@
-# FILPHANGS: Filament Identification Pipeline
+# FilPHANGS
 
-Associated Paper: Coming Soon!
+FilPHANGS is an automated pipeline for identifying and characterizing filamentary structures in astronomical images. It was developed for JWST PHANGS observations but is applicable to any continuum image where filamentary dust structures are expected.
 
-### Setup
+The pipeline decomposes an image into physical scales using constrained diffusion, runs the SOAX snake-tracing algorithm at each scale, constructs composite filament maps, fits PSFs along each detected filament, and extracts physical properties including length, line mass, surface density, and curvature.
 
-FilPHANGS is an extensive pipeleine that relies on the filament identification algorithm SOAX. The first step is to download the SOAX batch file, found here: https://www.lehigh.edu/~div206/soax/downloads.html. 
-It is currently available for Windows and Mac OS High Sierrra, but is actively being adapted to run on newer mac OS. After SOAX is installed, Julia will also need to be installed in order to use the cloud clean source removal: https://github.com/andrew-saydjari/CloudClean.jl. You do not need to install this repository, only Julia. Julia can be downloaded from this page: https://julialang.org/downloads/. 
+Associated paper: coming soon.
 
-After SOAX and Julia are downloaded, clone the repository and set up a FilPHANGS virtual environment using Conda. In this virtual environment, type 
-``` pip install -r requirements.txt ``` in terminal to automatically install the required libraries. 
+---
 
-The next step is to set up the FilPHANGS directory, where all output products will be stored. The entire Pipeline requires a very specific directory structure, described below: 
+## Prerequisites
 
-```
-FilPHANGS_base_directory/
-├── OriginalImages/
-├── CSV_Data.csv          # does not need to be in this directory, but recommended to keep all FilPHANGS files together
-├── Soax_Parameters.txt   # does not need to be in this directory, but recommended to keep all FilPHANGS files together
-└── Figures/
-```
+### SOAX
 
-OriginalImages contains all of the original images that you wish to process with FilPHANGS. It is required that the image names contain the image label (i.e. ngc0628) and the image band (i.e. F770W) seperated by an underscore. Other descriptors can also be in the name, but will be overwritten later on. The CSV_Data contains information on each galaxy that will be processed, and is referenced repeatedly by the software during run time. Soax_Parameters.txt contains the SOAX parameters we determined to be best. 
+SOAX is the underlying filament tracer. Download the batch executable from:
+https://www.lehigh.edu/~div206/soax/downloads.html
 
-Now we are ready to run FilPHANGS. Open Main.py and update the file paths at the top of the file to point to the correct locations. After this is done, FilPHANSG is ready to go! There are two functions which are immediately called, mainFuncs.renameFitsFiles() and mainFuncs.createDirectoryStructure(). These two functions will standardize all image names in the OriginalImages folder and will fill out the directory structure. Specifically, each image in OriginalImages will get its own output sub-directory, detailed below for an example image: 
+Binaries are available for Windows and macOS (High Sierra). Note the path to the `.exe` or binary — you will set it in `Main.py`.
 
-```
-FilPHANGS_base_directory/
-├── OriginalImages/
-├── CSV_Data.csv
-├── Soax_Parameters.txt   # (does not need to be in this directory, but recommended to keep all FilPHANGS files together)
-└── Figures/
-└── ngc0628_F770W/
-  └── BkgSubDivRMS/    # Containes background subtracted and scale decomposed Fits Files for trouble shooting
-  └── BlockedPng/      # Containes background subtracted and scale decomposed png files passed into SOAX
-  └── CDD/             # Containes parcec level decomposition into desired scales (namely 8pc, 16pc, 32pc, 64pc, 128pc, and 256pc)
-  └── Composites/      # Contains composite filament maps containing information from all 10 SOAX runs for each scale
-  └── SoaxOutput       # Contains SOAX outputs, with subfolders for each scale. SOAX output is a text file, so this also contains the reconstructed Fits File of the filament network. 
-  └── SourceRemoval/   # Contains pixel level decomposition used for source detection as well as source removed output images. 
-  └── SyntheticMap/    #Contains CSV files with filament properties extracted and synthetic images of the filament network based on Point Spread Function Fits
+### Julia and CloudClean (optional)
+
+Source removal (compact sources such as HII regions and star clusters) uses the Julia package [CloudClean.jl](https://github.com/andrew-saydjari/CloudClean.jl). You do not need to install the CloudClean repository itself — only Julia is required. Download Julia from https://julialang.org/downloads/ and install it with a kernel accessible to Jupyter (`julia-1.11` by default).
+
+Source removal is optional. Set `Rem_sources = False` in your image table to skip it for a given image.
+
+### Python
+
+Python 3.10 or later is required.
+
+---
+
+## Installation
+
+```bash
+conda create -n filphangs python=3.11
+conda activate filphangs
+pip install -r requirements.txt
 ```
 
-### Using FilPHANGS
+---
 
-Ensure that all columns are filled out in the CSV file and we can run Main.py. The only two limitations to be immediately aware of is that source removal will only work with F200W, F300W,F335M, F336M. F770W,F1000W, F1130W, F2100W at present. Further, the synthetic map generation and filament property extraction are only reliable with these bands. However, filament networks can be identified for attenuation images such as in the F550W band and many non-JWST images. 
+## Data Preparation
 
-A typical galaxy will take anywhere between 1-3 hours to complete the pipeline (including synthetic map generation and property extraction) and will require ~3GB of storage. Plotting functions are also supported in the DataProcessing folder, which will access the CSV files with all of the saved filament property data and plot by scale and galaxy. 
+### Image naming
 
-### Additional Features
+Images placed in `OriginalImages/` must contain the galaxy label and filter band separated by an underscore, e.g. `NGC0628_F770W_someDescriptor.fits`. The pipeline will standardize names on first run — additional descriptors in the filename are preserved.
 
-Certain Users may be interested in Filament comparison between galaxy regions (such as center vs interarm). This feature is supported if the path to a folder containing region masks is provided. Currently, this is only supported for region masks generated by the PHANGS team. Further, property extraction can be improved from the default to use dynamic AlphaCO maps instead of the constant of 5.5 described in https://iopscience.iop.org/article/10.3847/1538-4357/adbd40. This feature is only available for JWST images if a path to an alphaCO folder is provided in Main.py. 
+### Directory structure
 
-### Note
-All curvature calculations come directly from FilFinder: https://github.com/e-koch/FilFinder
+Create a base directory for all pipeline outputs. Only the `OriginalImages/` subdirectory and the two metadata files need to exist before the first run. Everything else is created automatically.
 
+```
+FilPHANGS_base/
+├── OriginalImages/          # Input FITS files go here
+├── ImageData.xlsx           # Per-image metadata (see below)
+├── SoaxParams.txt           # SOAX parameter file (provided in repo)
+└── Figures/                 # Created automatically
+```
 
+After the first run, each image gets its own output directory:
+
+```
+FilPHANGS_base/
+└── NGC0628_F770W/
+    ├── BkgSubDivRMS/        # Background-subtracted SNR images used by SOAX
+    ├── BlockedPng/          # Downsampled PNG inputs to SOAX
+    ├── CDD/                 # Scale-decomposed FITS images (16 pc, 32 pc, ...)
+    ├── Composites/          # Stacked filament maps across 10 SOAX runs per scale
+    ├── SoaxOutput/          # Raw SOAX text output and reconstructed FITS per scale
+    ├── Source_Removal/      # Source masks and inpainted images (if enabled)
+    └── SyntheticMap/        # PSF-based synthetic filament maps and property CSVs
+```
+
+### ImageData.xlsx
+
+The pipeline reads per-image metadata from an Excel file. Each row corresponds to one image. Required columns:
+
+| Column | Description | Example |
+|---|---|---|
+| `label` | Galaxy name, matched to filename | `NGC0628` |
+| `Band` | Filter name, matched to filename | `F770W` |
+| `Telescope` | Telescope identifier | `JWST` |
+| `INSTR` | Instrument identifier | `MIRI` |
+| `Image_Type` | Descriptor appended to standardized filename | `lev3` |
+| `current_dist` | Distance in Mpc | `9.84` |
+| `res` | Angular resolution in arcsec | `0.269` |
+| `pixscale` | Pixel scale in arcsec/pixel | `0.11` |
+| `Power of 2 min` | Minimum CDD decomposition scale as log2(pc) | `4` (= 16 pc) |
+| `Power of 2 max` | Maximum CDD decomposition scale as log2(pc) | `8` (= 256 pc) |
+| `Rem_sources` | Whether to run compact source removal | `True` / `False` |
+| `SSFR` | Specific star formation rate (log scale) | `-10.5` |
+| `Inclination Angle` | Galaxy inclination in degrees | `7.0` |
+
+The physical pixel scale used internally is `pixscale (arcsec/px) * 4.848 * distance (Mpc)` = pc/px.
+
+---
+
+## Configuration
+
+Open `Identification/Main.py` and update the paths and parameters in the configuration block near the top of the `if __name__ == "__main__"` section.
+
+### Paths
+
+```python
+base_dir        = Path(...)   # Base output directory (must contain OriginalImages/)
+csv_path        = Path(...)   # Path to ImageData.xlsx
+param_file_path = Path(...)   # Path to SoaxParams.txt
+batch_path      = Path(...)   # Path to the SOAX batch executable
+julia_path      = Path(...)   # Path to JuliaCloudClean_Output1.ipynb (source removal only)
+region_dir_path = Path(...)   # Optional: directory of region mask FITS files
+dynamic_alphaCO_path = Path(...)  # Optional: directory of alphaCO conversion maps
+```
+
+### Key parameters
+
+```python
+# Filament detection threshold
+min_aspect_ratio = 8.2
+```
+The minimum length-to-width ratio for a detected filament. Filament width is fixed to the 16 pc PSF resolution element (`16 pc / ScalePix` in pixels). At the reference pixel scale of 5.25 pc/px, a ratio of 8.2 corresponds to a minimum snake length of 25 pixels in SOAX. This threshold increases conservatively at larger (more heavily downsampled) scales — see the log output for the effective ratio at each scale.
+
+```python
+min_fg_int = 1638       # SOAX minimum foreground intensity (0–65535 scale)
+noise_min  = 1e-2       # Floor on background RMS noise (prevents division by near-zero)
+flatten_perc = 90       # Percentile used for the arctan intensity rescaling before SOAX
+min_intensity = 0       # Pixels below this value in the original image are set to zero
+```
+
+---
+
+## Running
+
+```bash
+cd Identification
+python Main.py
+```
+
+A log file `filphangs.log` is written alongside all console output. A typical galaxy takes 1–3 hours end-to-end and produces approximately 3 GB of output.
+
+---
+
+## Output
+
+The primary scientific output for each image and scale is a CSV file in `SyntheticMap/` containing one row per detected filament:
+
+| Column | Description |
+|---|---|
+| `Length_{scale}` | Filament length in parsecs |
+| `Line_Density_{scale}` | Line mass in solar masses per parsec |
+| `Mass_{scale}` | Total molecular mass in solar masses |
+| `Curvature_{scale}` | Angular width of the orientation distribution (radians) |
+| `Regions_{scale}` | Galaxy region index from the region mask (−1 if no mask provided) |
+
+A PSF-based synthetic image of the filament network is also saved as a FITS file in `SyntheticMap/`.
+
+---
+
+## Optional features
+
+**Region masks** — if a path to region mask FITS files is provided, each detected filament is assigned to the dominant region it overlaps, enabling comparisons between environments (e.g. arm vs. interarm). Region masks must follow the PHANGS region map format.
+
+**Dynamic alphaCO** — by default, molecular masses are computed using a constant CO-to-H2 conversion factor of 5.5 (see the associated paper for justification). If a directory of spatially-resolved alphaCO maps is provided, pixel-level conversion factors are used instead.
+
+---
+
+## Supported bands
+
+Source removal and property extraction are validated for JWST MIRI bands F770W, F1000W, F1130W, F2100W and NIRCam bands F200W, F300M, F335M, F360M. Filament networks can be identified (without property extraction) in attenuation maps and non-JWST images.
+
+---
+
+## Attribution
+
+If you use FilPHANGS in your work, please cite the associated paper (link forthcoming).
+
+Curvature calculations use algorithms from [FilFinder](https://github.com/e-koch/FilFinder) (Koch et al.).

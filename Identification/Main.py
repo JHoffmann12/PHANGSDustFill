@@ -30,109 +30,135 @@ logger = logging.getLogger(__name__)
 
 if __name__ == "__main__":
 
-    #paths
-    base_dir = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data")
-
-    # base_dir = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Validation_Data")
-    
-
-    csv_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data\ImageData.xlsx")
+    # -------------------------------------------------------------------------
+    # Paths — update these for your environment
+    # -------------------------------------------------------------------------
+    base_dir        = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data")
+    csv_path        = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data\ImageData.xlsx")
     param_file_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data\SoaxParams.txt")
-    batch_path = Path(r"C:\Users\jhoffm72\Downloads\batch_soax_v3.7.0.exe")
+    batch_path      = Path(r"C:\Users\jhoffm72\Downloads\batch_soax_v3.7.0.exe")
 
-    #For Julia soure removal
-    julia_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\PHANGSDustFill\Identification\JuliaCloudClean_Output1.ipynb")
+    # Source removal requires Julia and CloudClean (see README)
+    julia_path     = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\PHANGSDustFill\Identification\JuliaCloudClean_Output1.ipynb")
     julia_out_path = julia_path
 
-    #Additional features
-    region_dir_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data\masks_v5_simple")
+    # Optional: set to None to disable region assignment or dynamic alphaCO
+    region_dir_path      = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data\masks_v5_simple")
     dynamic_alphaCO_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data\PHANGS_alphaCO_conversion_factor_maps")
 
-    #SOAX params
-    # min_aspect_ratio = length / width, where width = 16 pc / ScalePix.
-    # 8.2 yields min_snake_length_ss = 25 px at the reference ScalePix of 5.25 pc/px.
+    # -------------------------------------------------------------------------
+    # Detection parameters
+    # -------------------------------------------------------------------------
+
+    # Minimum filament length-to-width ratio. Width = 16 pc / ScalePix.
+    # 8.2 gives a 25-pixel minimum at the reference scale (5.25 pc/px).
+    # The effective ratio increases conservatively at larger (blocked) scales.
     min_aspect_ratio    = 8.2
     min_snake_length_ss = mainFuncs.getMinSnakeLengthFromAspectRatio(min_aspect_ratio)
+
+    # SOAX minimum foreground intensity (0–65535). Pixels below this are ignored
+    # during snake initialization.
     min_fg_int = 1638
 
-    #Non SOAX params
-    probability_threshold = .3
-    min_length = 10
-    noise_min = 10**-2 #.55 for IC5146, 10**-2 for F770W
-    flatten_perc = 90 #99 for IC5146, 90 for F770W
-    min_intensity = 0 #0 for F770W, 4 for hersch
-#   ____________________________________________________________________________________________
-#   ____________________________________________________________________________________________
+    # Floor on background RMS noise. Prevents division by near-zero in faint regions.
+    # Use ~0.55 for extinction maps (IC5146), ~0.01 for JWST F770W.
+    noise_min = 1e-2
 
-    start = time.time() #get start time
+    # Percentile used to set the knee of the arctan intensity rescaling applied
+    # before SOAX. Use ~99 for high-dynamic-range images (IC5146), ~90 for F770W.
+    flatten_perc = 90
 
-    # todo = ['0628','1566', '4535', '7496'] #6028 and 1433 previously here
-    # todo = ['0628'] 
-    # mainFuncs.clearAllFiles(base_dir, csv_path, param_file_path) #clear all files
-    mainFuncs.renameFitsFiles(base_dir, csv_path,  ID_set= True) #apply naming convention to original files...True for validation! 
+    # Pixels in the original image below this intensity are zeroed out before
+    # processing. Use 0 for JWST, ~4 for Herschel.
+    min_intensity = 0
 
-    mainFuncs.createDirectoryStructure(base_dir, csv_path)  #Create Directory and sub folders. Will not create if already present.
+    # -------------------------------------------------------------------------
 
-    for label in os.listdir(base_dir):  #Loop through Each Galaxy
+    start = time.time()
+
+    # Uncomment to restrict processing to specific galaxies:
+    # todo = ['0628', '1566', '4535', '7496']
+
+    # Uncomment to wipe all outputs and start fresh:
+    # mainFuncs.clearAllFiles(base_dir, csv_path, param_file_path)
+
+    # Standardize filenames and create the per-image output directory structure.
+    # Safe to re-run; existing directories are left untouched.
+    mainFuncs.renameFitsFiles(base_dir, csv_path, ID_set=True)
+    mainFuncs.createDirectoryStructure(base_dir, csv_path)
+
+    for label in os.listdir(base_dir):
 
         label_folder_path = os.path.join(base_dir, label)
-
-        if not os.path.isdir(label_folder_path):  # Skip if it's not a directory`       `
+        if not os.path.isdir(label_folder_path):
             continue
 
-        if (label != 'OriginalMiriImages' and label != "Figures" and 'IC5146' not in label
-                and 'masks_v5' not in label): # and any(t in label for t in todo)):
+        # Skip non-galaxy folders
+        if label in ('OriginalMiriImages', 'Figures') or 'IC5146' in label or 'masks_v5' in label:
+            continue
 
-            distance_Mpc,res, pixscale, MJysr, Band, min_power, max_power, Rem_sources, sSFR, Inclination = mainFuncs.getInfo(label, csv_path) #get relevant information for image from csv file
+        # Uncomment to process only a subset:
+        # if not any(t in label for t in todo):
+        #     continue
 
-            ScalePix =  pixscale * 4.848 * distance_Mpc 
-            orig_image = get_fits_file_path(os.path.join(base_dir, "OriginalImages"), label)
+        info = mainFuncs.getInfo(label, csv_path)
+        if info is None:
+            continue
+        distance_Mpc, res, pixscale, MJysr, Band, min_power, max_power, Rem_sources, sSFR, Inclination = info
 
+        orig_image = get_fits_file_path(os.path.join(base_dir, "OriginalImages"), label)
 
-            if Rem_sources:
-                if orig_image is None:
-                    logger.warning('Skipping %s: no FITS file found in OriginalImages', label)
-                    continue
-                
-                cdd_pix.decompose(label_folder_path, base_dir, label, numscales=3)
+        if Rem_sources:
+            if orig_image is None:
+                logger.warning('Skipping %s: no FITS file found in OriginalImages', label)
+                continue
+            cdd_pix.decompose(label_folder_path, base_dir, label, numscales=3)
+            mask_save_path = MySourceFinder.CreateSourceMask(label_folder_path, orig_image, res, pixscale, MJysr, Band, pixscale * 4.848 * distance_Mpc)
+            image_path = CloudClean.Remove(julia_path, julia_out_path, mask_save_path, orig_image, label_folder_path)
+            image_path = MySourceFinder.CloudCleanCheck(image_path, mask_save_path, orig_image, label_folder_path)
+        else:
+            image_path = get_fits_file_path(os.path.join(base_dir, "OriginalImages"), label)
 
-                mask_save_path = MySourceFinder. CreateSourceMask(label_folder_path, orig_image, res, pixscale, MJysr, Band, ScalePix ) 
-                image_path = CloudClean.Remove( julia_path,  julia_out_path, mask_save_path,  orig_image, label_folder_path)
-                image_path = MySourceFinder.CloudCleanCheck(image_path, mask_save_path, orig_image, label_folder_path)
-            else:
-                image_path = get_fits_file_path(os.path.join(base_dir, "OriginalImages"), label)
+        # Decompose into physical scales via constrained diffusion
+        Modified_Constrained_Diffusion.decompose(image_path, label_folder_path, base_dir, label, distance_Mpc, res, pixscale, min_power, max_power, Rem_sources)
 
-            Modified_Constrained_Diffusion.decompose(image_path, label_folder_path, base_dir, label, distance_Mpc, res, pixscale, min_power, max_power, Rem_sources) #decompose into scales
+        # Build a FilamentMap object for each decomposed scale
+        FilamentMapList = mainFuncs.setUpGalaxy(base_dir, label_folder_path, label, distance_Mpc, res, pixscale, param_file_path, noise_min, flatten_perc, min_intensity, sSFR, Inclination)
 
-            FilamentMapList = mainFuncs.setUpGalaxy(base_dir, label_folder_path, label, distance_Mpc, res, pixscale, param_file_path, noise_min, flatten_perc, min_intensity, sSFR, Inclination ) #Initialize Filament Map objects
+        for filMap in FilamentMapList:
 
-            for filMap in FilamentMapList: #iterate through each Filament Map object 
+            filMap.scaleBkgSubDivRMSMap(write_fits=False)
+            filMap.runSoaxThreads(min_snake_length_ss, min_fg_int, batch_path)
+            filMap.createComposite(write_fits=False)
 
-                #Necessary functions in order to produce a skeletonized filament map
-                filMap.scaleBkgSubDivRMSMap(write_fits = False)
-                filMap.runSoaxThreads(min_snake_length_ss, min_fg_int, batch_path) #Create 10 soax FITS files
-                filMap.createComposite(write_fits = False) #Combine all 10 Fits files
-                # filMap.getSyntheticFilamentMapApprox(min_scale = 2**min_power, alphaCO_tag = 'SL24', use_dynamic_alphaCO = dynamic_alphaCO_path, use_Regions = region_dir_path, extract_Properties = False, write_fits = True) # Creates a synthetic map of all filaments at a single scale from the blurred probability_map. set_as_composite = True. 
-                filMap.getSyntheticFilamentMapExact(min_scale = 2**min_power, alphaCO_tag = 'SL24', use_dynamic_alphaCO = dynamic_alphaCO_path, use_Regions = region_dir_path, extract_Properties = True, write_fits = True, min_aspect_ratio = min_aspect_ratio)
+            # PSF-based synthetic map + property extraction (primary pipeline)
+            filMap.getSyntheticFilamentMapExact(
+                min_scale=2**min_power,
+                alphaCO_tag='SL24',
+                use_dynamic_alphaCO=dynamic_alphaCO_path,
+                use_Regions=region_dir_path,
+                extract_Properties=True,
+                write_fits=True,
+                min_aspect_ratio=min_aspect_ratio,
+            )
 
-                #Current status: reprojecting the skeletonized image is fucked, need to fix. 
+            # LSE approximate synthetic map (faster, less accurate — uncomment to use instead)
+            # filMap.getSyntheticFilamentMapApprox(
+            #     min_scale=2**min_power, alphaCO_tag='SL24',
+            #     use_dynamic_alphaCO=dynamic_alphaCO_path, use_Regions=region_dir_path,
+            #     extract_Properties=False, write_fits=True, min_aspect_ratio=min_aspect_ratio,
+            # )
 
-                # Delete the object to clear memory
-                # filMap_index = FilamentMapList.index(filMap)  
-                # del FilamentMapList[filMap_index]            
-                # del filMap                                  
+            # Legacy SOAX-composite processing (uncomment to use instead of PSF pipeline)
+            # filMap.blurComposite(set_blur_as_prob=True, write_fits=True)
+            # skelData = filMap.applyProbabilityThresholdAndSkeletonize(probability_threshold=0.3, min_len_pix=10, write_fits=True)
+            # filMap.removeJunctions(skelData, probability_threshold=0.3, min_len_pix=10, set_as_composite=True, write_fits=True)
 
-            
-                #Extra Processing
-                # filMap.blurComposite(set_blur_as_prob = True, write_fits = True) #Blur the composite
-                # skelData = filMap.applyProbabilityThresholdAndSkeletonize(probability_threshold = probability_threshold, min_area_pix = min_area_pix, write_fits = True)
-                # filMap.removeJunctions(skelData, probability_threshold, min_area_pix, set_as_composite = True, write_fits = True)
-
-                #Extra plots
-                # mainFuncs.CreateSNRPlot(FilamentMapList, base_dir, percentile = 99, write = True)
-                # filMap.getProbIntensityPlot(use_orig_img = False, write_fig = True) #Compares probability vs intensity
-                # filMap.getNoiseLevelsHistogram(noise_min = noise_min, write_fig = True)  # Histogram of calculated noise
-                # filMap.getFilamentLengthHistogram(probability_threshold = probability_threshold, write_fig = True) # Histogram of filament length in pixels
+            # Diagnostic plots (uncomment as needed)
+            # mainFuncs.CreateSNRPlot(FilamentMapList, base_dir, percentile=99, write=True)
+            # filMap.getProbIntensityPlot(use_orig_img=False, write_fig=True)
+            # filMap.getNoiseLevelsHistogram(noise_min=noise_min, write_fig=True)
+            # filMap.getFilamentLengthHistogram(probability_threshold=0.3, write_fig=True)
 
     # Display Time information
     end = time.time()
