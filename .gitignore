@@ -5,3 +5,4 @@ imgNew_reprojected.fits
 Molecular_Mass.fits
 nan_mask.fits
 *.fits 
+*.log

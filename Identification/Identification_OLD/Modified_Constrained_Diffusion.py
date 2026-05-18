@@ -1,17 +1,39 @@
-# Scale decomposition used by the main pipeline.
+#Decomposes image into specified scales
 
-import logging
+#imports
+import copy
 import math
-import os
 from math import log
+import os
+from os import path
 from pathlib import Path
+import re
+import sys
 
+# Third-party libraries
 import constrained_diffusion_decomposition_specificscales as cddss
+import imageio
+import matplotlib
+from matplotlib import cm
+import matplotlib.pyplot as plt
 import numpy as np
-from astropy.io import fits
+from pylab import *
+from scipy import ndimage
 from scipy.ndimage import gaussian_filter
+from skimage import color, data, exposure
+from skimage.filters import frangi, hessian, meijering, rank, sato
+from skimage.morphology import ball, binary_dilation, disk
+from skimage.restoration import inpaint
+from skimage.util import img_as_ubyte
+from skimage.util.dtype import dtype_range
 
-logger = logging.getLogger(__name__)
+# Astropy
+from astropy.convolution import convolve, Gaussian2DKernel
+from astropy.io import fits
+from astropy.table import Table
+from astropy.visualization import make_lupton_rgb
+
+plt.rcParams['figure.figsize'] = [15, 15]
 
 
 def openFits(path):
@@ -90,11 +112,13 @@ def get_fits_file_path(folder_path, galaxy_name):
     - The full path to the matching FITS file, or None if no file is found.
     """
 
-    for file_name in os.listdir(folder_path):
-        if file_name.endswith('.fits') and galaxy_name in file_name:
-            return str(Path(folder_path) / file_name)
+    for file_name in os.listdir(folder_path):  #Loop through all files in the given folder
+
+        if file_name.endswith('.fits') and galaxy_name in file_name:   # Check if the file is a FITS file and contains the galaxy name
+
+            return os.path.join(folder_path, file_name)
     
-    logger.warning("No FITS file found for galaxy: %s", galaxy_name)
+    print(f"No FITS file found for galaxy: {galaxy_name}") #If no matching file is found
     
     return None
 
@@ -152,7 +176,7 @@ def decompose(image_path, label_folder_path, base_dir, label, distance_mpc, res,
         pixscales_lo = pixscales_lo[idx]
         pixscales = pixscales[idx]
         pcscales = pcscales[idx]
-        logger.debug("pc ranges: %s", pixscales * pix_pc)
+        print(f"pc ranges: {pixscales*pix_pc}")
 
         #decompose the image
         result_in, residual_in, kernel_sizes = cddss.constrained_diffusion_decomposition_specificscales(
@@ -185,11 +209,11 @@ def decompose(image_path, label_folder_path, base_dir, label, distance_mpc, res,
                 image_now = np.nan_to_num(image_now)
                 image_now = gaussian_filter(image_now, sigma = psf_stddev)    
             except ValueError:
-                logger.warning("Could not smooth CDD channel %d with convolution", idx)
+                print("Error: Could not smooth CDD image with convolution")    
 
 
 
-            imagepath = get_fits_file_path(Path(base_dir) / "OriginalImages", label)
+            imagepath = get_fits_file_path(os.path.join(base_dir, "OriginalImages"), label)
             data, header, _ = openFits(imagepath)
             data  = np.array(image_now.astype(np.float32))
 
@@ -208,7 +232,7 @@ def decompose(image_path, label_folder_path, base_dir, label, distance_mpc, res,
                 outputpath = Path(f"{base_dir}/{label}/CDD/{base_name}_CDDss{str(float(pcscales[idx])).rjust(4, '0')}{tag}")
 
             hduout.writeto(outputpath, overwrite=True)
-            logger.debug("wrote CDD scale %s to %s", pcscales[idx], outputpath)
+            print('Image saved')
 
 
 def clean_header(header):
@@ -224,7 +248,7 @@ def clean_header(header):
                 continue
             cleaned.append(card)
         except Exception as e:
-            logger.debug("Skipping bad header card %s: %s", card, e)
+            print(f"Skipping bad card: {card} — {e}")
             continue
     return cleaned
 
@@ -264,14 +288,18 @@ def decompositionExists(base_path):
     """
 
     # Construct the CDD folder path
-    cdd_path = Path(base_path) / "CDD"
+    cdd_path = os.path.join(base_path, "CDD")
 
     # Check if the folder exists
     if not os.path.exists(cdd_path):
-        logger.debug("CDD folder not found in %s", base_path)
+        print(f"The folder 'CDD' does not exist in {base_path}.")
         return False
+
+    # Check if the folder is empty
     if not os.listdir(cdd_path):
-        logger.debug("CDD folder is empty in %s", base_path)
+        print(f"The folder 'CDD' is empty in {base_path}.")
         return False
-    return True
+    else:
+        print(f"The folder 'CDD' is not empty in {base_path}.")
+        return True
     

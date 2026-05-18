@@ -27,5 +27,5 @@ def Remove(julia_path, julia_out_path, mask_path, orig_image_path, label_folder_
         logger.error("papermill execution failed: %s", e)
         raise
 
-    logger.info("Source removal complete → %s", save_path)
+    logger.info("Source removal complete -> %s", save_path)
     return save_path

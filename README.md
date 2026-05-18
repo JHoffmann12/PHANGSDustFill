@@ -37,6 +37,8 @@ conda activate filphangs
 pip install -r requirements.txt
 ```
 
+SOAX is a standalone binary and is not installed via pip — see the Prerequisites section above.
+
 ---
 
 ## Data Preparation
@@ -166,6 +168,20 @@ A PSF-based synthetic image of the filament network is also saved as a FITS file
 ## Supported bands
 
 Source removal and property extraction are validated for JWST MIRI bands F770W, F1000W, F1130W, F2100W and NIRCam bands F200W, F300M, F335M, F360M. Filament networks can be identified (without property extraction) in attenuation maps and non-JWST images.
+
+---
+
+## Troubleshooting
+
+**SOAX produces no output** — check that `batch_path` points to the correct executable and that `min_fg_int` is not set too high for your image's dynamic range. SOAX output files appear in `SoaxOutput/<scale>/`.
+
+**Julia kernel not found** — the notebook launcher expects a kernel named `julia-1.11`. After installing Julia, run `julia -e 'using IJulia; installkernel("Julia")'` to register it, then check the kernel name in Jupyter and update `JuliaCloudClean_Output1.ipynb` if it differs.
+
+**No CDD files produced** — the scale filter in `Modified_Constrained_Diffusion.py` requires that each physical scale is both resolved (above 1.33× the PSF FWHM) and smaller than half the image. Check that `Power of 2 min` and `Power of 2 max` in `ImageData.xlsx` are appropriate for your pixel scale and distance.
+
+**`filphangs.log` grows large** — the log file is opened in append mode (`mode='a'`). Delete or truncate it between full pipeline runs if disk space is a concern.
+
+**SIP distortion warnings from astropy** — these are harmless for images that have already been drizzled. They can be silenced by adding `-SIP` to the CTYPE keywords in the FITS header or by suppressing the warning class in `Main.py`.
 
 ---
 

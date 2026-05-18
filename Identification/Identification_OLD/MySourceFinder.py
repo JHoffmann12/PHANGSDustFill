@@ -1,11 +1,8 @@
 # Standard library
 import glob
 import importlib
-import logging
 import os
 import warnings
-
-logger = logging.getLogger(__name__)
 
 # Third-party libraries
 import matplotlib.pyplot as plt
@@ -47,17 +44,17 @@ from scipy.constants import c as speed_of_light
 from astropy.time import Time
 
 
-def crossmatch_fits_tables(table1, table2, table3, sep_arcsec=0.22):
+def crossmatch_fits_tables(table1_path, table2_path, table3_path, sep_arcsec=0.22):
     """
-    Cross-matches three source tables based on sky position, categorizing matches
+    Cross-matches three FITS tables based on sky position, categorizing matches
     as triple, double, or single, and retaining all sources.
     Includes angular separations between matched components and average sky positions
     in the output.
 
     Args:
-        table1 (astropy.table.Table): Source table from CDD scale 1.
-        table2 (astropy.table.Table): Source table from CDD scale 2.
-        table3 (astropy.table.Table): Source table from CDD scale 3.
+        table1_path (str): Path to the first FITS table.
+        table2_path (str): Path to the second FITS table.
+        table3_path (str): Path to the third FITS table.
         sep_arcsec (float): Maximum separation in arcseconds for a match.
 
     Returns:
@@ -65,10 +62,26 @@ def crossmatch_fits_tables(table1, table2, table3, sep_arcsec=0.22):
                              their match type, properties from the matched tables,
                              angular separations where applicable, and average RA/Dec.
     """
+    # Define common column names that are expected in your FITS tables.
+    # These columns will be extracted and prefixed (e.g., 't1_ra', 't2_flux')
+    # in the final output table. Add or remove columns as per your FITS file schema.
     common_source_cols = [
         'ra', 'dec', 'flux', 'peak', 'xcentroid', 'ycentroid',
         'sharpness', 'roundness1', 'roundness2',
+        # Add any other relevant columns like 'mag', 'err', etc.
     ]
+
+    # 1. Read Tables and Prepare for Analysis
+    try:
+        table1 = Table.read(table1_path)
+        table2 = Table.read(table2_path)
+        table3 = Table.read(table3_path)
+    except FileNotFoundError as e:
+        print(f"Error: One or more FITS files not found: {e}")
+        return Table() # Return an empty table on file error
+    except Exception as e:
+        print(f"An unexpected error occurred while reading FITS files: {e}")
+        return Table()
 
     # Prepare tables for vstacking: add 'origin', 'original_id', and ensure common columns
     tables_to_stack = []
@@ -401,19 +414,22 @@ def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixs
     scalenum = 1
 
 
-    #iterate through CDD images:
-    tables = []
+    #iterate through CDD images: 
+    table_paths = []
     for galaxy in os.listdir(cdd_dir):
         image_path = os.path.join(cdd_dir, galaxy)
         with fits.open(image_path) as hdul:
-            sci_hdu = hdul['SCI'] if 'SCI' in hdul else hdul[0]
+            sci_hdu = hdul['SCI'] if 'SCI' in hdul else [0]
             data = np.array(sci_hdu.data)
             header = sci_hdu.header
+
+
+
 
         galaxy, extension = os.path.splitext(galaxy)
 
         findfwhmpix=np.max([2**(scalenum-1),res_as/pix_as])
-        findthreshval = 0  # threshold=0 detects all point-source-shaped local maxima above background
+        findthreshval=(threshscale1*sigma_MJysr)/threshfact[scalenum-1]
 
         data = np.nan_to_num(data, nan=0.0)  # Replace NaNs with 0
 
@@ -422,21 +438,35 @@ def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixs
         sources = daofind(data - 0.) # bkgd already subtracted when using constrained diffusion decomp input
         positions = np.transpose((sources['xcentroid'], sources['ycentroid']))
         apertures = CircularAperture(positions, r=res_as/pix_as)
+        # Add RA and Dec columns to the sources table using the WCS
         wcs = WCS(header)
+        #SkyPos = wcs.pixel_to_world(sources['xcentroid'], sources['ycentroid'])
         SkyPos = astropy.wcs.utils.pixel_to_skycoord(sources['xcentroid'], sources['ycentroid'],wcs=wcs,origin=0)
         sources['ra'] = SkyPos.ra.degree
         sources['dec'] = SkyPos.dec.degree
 
-        # Keep table in memory; no need to write per-scale tables to disk
-        tables.append(Table(sources))
+        # Convert the sources array to an astropy table
+        sources_table = Table(sources)
+
+        # Write the table to a FITS file
+        save_path = os.path.join(source_rem_dir, "Source_Tables")
+        save_path = os.path.join(save_path, galaxy +'pix_sources_table.fits')
+        table_paths.append(save_path)
+        sources_table.write(save_path, overwrite=True)
         scalenum+=1
 
-    # Cross-match the three per-scale catalogs entirely in memory
-    combined_catalog = crossmatch_fits_tables(tables[0], tables[1], tables[2], sep_arcsec=0.22)
 
-    # Pre-S/N-cut combined catalog — diagnostic only, not used downstream
-    # save_path = os.path.join(source_rem_dir, galaxy + 'CDDfs_sources_table.fits')
-    # combined_catalog.write(save_path, overwrite=True)
+
+    #Now use the tables, assumes 3 exist
+    table1_path= table_paths[0]
+    table2_path= table_paths[1]
+    table3_path= table_paths[2]
+
+    combined_catalog = crossmatch_fits_tables(table1_path, table2_path, table3_path, sep_arcsec=0.22)
+
+
+    save_path = os.path.join(source_rem_dir, galaxy + 'CDDfs_sources_table.fits')
+    combined_catalog.write(save_path, overwrite=True) 
 
 
 
@@ -590,6 +620,8 @@ def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixs
         datan = datan.astype(float)
 
         mask = (np.isinf(data) | np.isnan(data) | np.isinf(datan) | np.isnan(datan))
+
+        mask=((np.isinf(data)) | (np.isnan(data)) | (np.isinf(datan)) | (np.isnan(datan)))
         data=data*counts
         datan=datan*counts
 
@@ -750,7 +782,7 @@ def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixs
         #CONCENTRATION INDEX
         combined_catalog['CI_1pix3pix']=CI_1pix3pix
 
-        logger.info("Sources before S/N cut: %d", len(combined_catalog))
+        print(f'sources befoe: {len(combined_catalog)}')
 
 
         bkg_ratio_path = os.path.join(source_rem_dir, '_CDDfs'+str(4).rjust(4, '0')+'BKGDRATIO.fits') #4pix bkg ratio
@@ -764,15 +796,23 @@ def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixs
         # bkg_thresh = np.percentile(bkg_ratio_img, 97)
 
         s2ncut_combined_catalog = combined_catalog[((CI_1pix3pix <= 1.2) & (aper_stats_2_bkg_ratio.max >= 2)) | ((phot_1['aperture_sum'] > np.percentile(phot_1['aperture_sum'], 97)) & (CI_1pix3pix <= 1.9))] #why 97? #((CI_1pix3pix <= 1.6) & (aper_stats_2_bkg_ratio.max >= 1.5))
-        logger.debug("Median of bkg ratio max: %.4f", np.median(aper_stats_2_bkg_ratio.max))
-        logger.info("Sources after S/N cut: %d", len(s2ncut_combined_catalog))
+        print(f'median of max is: {np.median(aper_stats_2_bkg_ratio.max)}')
 
-        # S/N-cut catalog — diagnostic only, not used downstream
-        # s2ncut_combined_catalog.write(os.path.join(source_rem_dir, 'CDDfs_sources_table_S2N.fits'), overwrite=True)
+        print(f'sources after: {len( s2ncut_combined_catalog)}')
+    
 
-        # DS9 region file — diagnostic only, not used downstream
-        # region_filename = os.path.join(source_rem_dir, galaxy + galaxy+'_'+bandstr+'_CDDfs_sources_S2N.reg')
-        # write_ds9_region_file(s2ncut_combined_catalog, region_filename, radius_arcsec=0.22)
+        print(len(s2ncut_combined_catalog))
+
+        s2ncut_combined_catalog.write(os.path.join(source_rem_dir, 'CDDfs_sources_table_S2N.fits'), overwrite=True)
+
+
+
+        # Define the output region file name
+        region_filename =  os.path.join(source_rem_dir, galaxy + galaxy+'_'+bandstr+'_CDDfs_sources_S2N.reg')
+
+
+        # Write the DS9 region file using the combined catalog
+        write_ds9_region_file(s2ncut_combined_catalog, region_filename, radius_arcsec=0.22) # Example radius
 
         # Convert sky coordinates to pixel positions
         wcs = WCS(header)
@@ -780,22 +820,26 @@ def CreateSourceMask(label_folder_path , orig_image, res, pix, MJysr, Band, pixs
         x_pix, y_pix = wcs.world_to_pixel(sky_coords)
         positions = list(zip(x_pix, y_pix))
 
-        radius_pix = 3
+        # Fixed radius of 3 pixels (as you want)
+        radius_pix = 3 #can change
+
+        # Create a binary mask
         mask = np.zeros(data.shape, dtype=int)
 
         for pos in positions:
             aperture = CircularAperture(pos, r=radius_pix)
-            aperture_mask = aperture.to_mask(method='center')
+            aperture_mask = aperture.to_mask(method='center')  # 'center' gives solid circle
             mask_data = aperture_mask.to_image(data.shape)
-            if mask_data is not None:
-                mask[mask_data > 0] = 1
 
-        # Mask FITS — required by CloudClean.Remove and CloudCleanCheck
-        mask_save_path = os.path.join(source_rem_dir, galaxy + '_' + bandstr + '_CDDfs_sources_S2N_mask.fits')
+            if mask_data is not None:
+                mask[mask_data > 0] = 1  # Set pixels inside aperture to 1
+
+        # Save the mask to a FITS file
+        mask_save_path = region_filename.replace('.reg', '_mask.fits')
         hdu = fits.PrimaryHDU(mask, header=header)
         hdu.writeto(mask_save_path, overwrite=True)
 
-        logger.info("Source mask saved to: %s", mask_save_path)
+        print(f"Mask saved to: {mask_save_path}")
         return mask_save_path
     
 
@@ -819,26 +863,29 @@ def CloudCleanCheck(image_path, mask_save_path, orig_image_path, label_folder_pa
     orig_img, orig_header = openFits(orig_image_path)
     
     count = 0
-    radius = 6
+    radius = 6 #freee to change
     mask = masked_sources.astype(bool)
     infilled_img = np.copy(source_removed_image)
 
     rows, cols = source_removed_image.shape
 
-    # Iterate only over masked (source) pixels rather than the full image grid
-    for i, j in np.argwhere(mask):
-        r0, r1 = max(0, i - radius), min(rows, i + radius + 1)
-        c0, c1 = max(0, j - radius), min(cols, j + radius + 1)
+    for i in range(rows):
+        for j in range(cols):
+            if mask[i, j]:
+                # Define local window boundaries
+                r0, r1 = max(0, i - radius), min(rows, i + radius + 1)
+                c0, c1 = max(0, j - radius), min(cols, j + radius + 1)
 
-        window = source_removed_image[r0:r1, c0:c1]
-        local_mask = masked_sources[r0:r1, c0:c1]
+                # Extract local region
+                window = source_removed_image[r0:r1, c0:c1]
 
-        val1 = np.mean(window[local_mask == 0])
-        val2 = np.mean(window[local_mask == 1])
-        if np.abs(val2 - val1) > thresh * val1 or np.std(window[local_mask == 1]) > thresh:
-            non_src_vals = window[local_mask == 0]
-            infilled_img[i, j] = np.median(non_src_vals)
-            count += 1
+                # Infill with median of available neighbors
+                val1 = np.mean(window[masked_sources[r0:r1, c0:c1] == 0])
+                val2 = np.mean(window[masked_sources[r0:r1, c0:c1] == 1])
+                if np.abs(val2 - val1) > thresh*val1 or np.std(window[masked_sources[r0:r1, c0:c1] == 1]) > thresh: 
+                    non_src_vals = window[masked_sources[r0:r1, c0:c1] == 0]
+                    infilled_img[i, j] = np.median(non_src_vals)
+                    count+=1
 
     save_path = os.path.join(label_folder_path, "Source_Removal")
     save_path = os.path.join(save_path, f"OriginalImageSourcesRemoved_MEDIAN_INFILL_{count}_Pix.fits")

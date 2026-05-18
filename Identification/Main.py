@@ -16,7 +16,11 @@ import MySourceFinder
 from astropy.io import fits
 import cdd_pix
 import CloudClean
+import warnings
+from astropy.wcs import FITSFixedWarning
 matplotlib.use('Agg')
+warnings.filterwarnings('ignore', category=FITSFixedWarning)
+logging.getLogger('reproject').setLevel(logging.WARNING)  # suppress non-dask mode INFO spam
 
 logging.basicConfig(
     level=logging.INFO,
@@ -51,8 +55,8 @@ if __name__ == "__main__":
     # -------------------------------------------------------------------------
 
     # Minimum filament length-to-width ratio. Width = 16 pc / ScalePix.
-    # 8.2 gives a 25-pixel minimum at the reference scale (5.25 pc/px).
-    # The effective ratio increases conservatively at larger (blocked) scales.
+    # At 16pc (BlockFactor=0, Scalepix~5.25): min_skel ~25 px -> ~131 pc minimum length.
+    # The effective ratio increases at larger (blocked) scales due to the sqrt-BF reduction.
     min_aspect_ratio    = 8.2
     min_snake_length_ss = mainFuncs.getMinSnakeLengthFromAspectRatio(min_aspect_ratio)
 
@@ -94,7 +98,7 @@ if __name__ == "__main__":
             continue
 
         # Skip non-galaxy folders
-        if label in ('OriginalMiriImages', 'Figures') or 'IC5146' in label or 'masks_v5' in label:
+        if label in ('OriginalMiriImages', 'Figures') or 'IC5146' in label or 'masks_v5' in label: # or not '0628_F770W' in label: 
             continue
 
         # Uncomment to process only a subset:
@@ -130,7 +134,7 @@ if __name__ == "__main__":
             filMap.scaleBkgSubDivRMSMap(write_fits=False)
             filMap.runSoaxThreads(min_snake_length_ss, min_fg_int, batch_path)
             filMap.createComposite(write_fits=False)
-            rep_centers = filMap.processComposite(coords_runs = 10, min_confidence=0.1, min_overlap_fraction=0.1)
+            rep_centers = filMap.processComposite(min_confidence=0.1, min_overlap_fraction=0.1)
 
             # PSF-based synthetic map + property extraction (primary pipeline)
             filMap.getSyntheticFilamentMapExact(min_scale=2**min_power, rep_centers=rep_centers, alphaCO_tag='SL24', use_dynamic_alphaCO=dynamic_alphaCO_path, use_Regions=region_dir_path, extract_Properties=True, write_fits=True, min_aspect_ratio=min_aspect_ratio)

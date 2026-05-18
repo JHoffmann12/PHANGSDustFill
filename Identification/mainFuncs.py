@@ -137,7 +137,7 @@ def getMinSnakeLengthFromAspectRatio(min_aspect_ratio, ref_scale_pc=16.0, ref_sc
     """
     ref_width_pix      = ref_scale_pc / ref_scalepix
     min_snake_length_ss = round(min_aspect_ratio * ref_width_pix)
-    logger.info("min_aspect_ratio=%.2f → ref_width=%.2f px → min_snake_length_ss=%d", min_aspect_ratio, ref_width_pix, min_snake_length_ss)
+    logger.info("min_aspect_ratio=%.2f -> ref_width=%.2f px -> min_snake_length_ss=%d", min_aspect_ratio, ref_width_pix, min_snake_length_ss)
     return min_snake_length_ss
 
 
@@ -367,6 +367,6 @@ def renameFitsFiles(base_dir, csv_path, ID_set=False):
 
         new_filepath = os.path.join(fits_file_folder_path, new_filename)
         os.rename(full_file_path, new_filepath)
-        logger.info("Renamed %s → %s", filename, new_filename)
+        logger.info("Renamed %s -> %s", filename, new_filename)
 
     logger.info("Renaming process completed.")
