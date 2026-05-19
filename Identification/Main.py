@@ -51,6 +51,11 @@ if __name__ == "__main__":
     dynamic_alphaCO_path = Path(r"C:\Users\jhoffm72\Documents\FilPHANGS\Data\PHANGS_alphaCO_conversion_factor_maps")
 
     # -------------------------------------------------------------------------
+    # Timeout parameters (minutes)
+    # -------------------------------------------------------------------------
+    soax_timeout_min = 35   # per individual SOAX run; 5 runs execute in parallel per scale
+
+    # -------------------------------------------------------------------------
     # Detection parameters
     # -------------------------------------------------------------------------
 
@@ -77,6 +82,12 @@ if __name__ == "__main__":
     min_intensity = 0
 
     # -------------------------------------------------------------------------
+    todo = ['1512', '1566', '2835', '3351', '3627', '4254', '4303', '4321', '4535', '5068', '7496']
+    todo = ['4254', '4303', '1433',] 
+
+    # -------------------------------------------------------------------------
+
+
 
     start = time.time()
 
@@ -102,8 +113,8 @@ if __name__ == "__main__":
             continue
 
         # Uncomment to process only a subset:
-        # if not any(t in label for t in todo):
-        #     continue
+        if not any(t in label for t in todo):
+            continue
 
         info = mainFuncs.getInfo(label, csv_path)
         if info is None:
@@ -132,7 +143,7 @@ if __name__ == "__main__":
         for filMap in FilamentMapList:
 
             filMap.scaleBkgSubDivRMSMap(write_fits=False)
-            filMap.runSoaxThreads(min_snake_length_ss, min_fg_int, batch_path)
+            filMap.runSoaxThreads(min_snake_length_ss, min_fg_int, batch_path, soax_timeout_min=soax_timeout_min)
             filMap.createComposite(write_fits=False)
             rep_centers = filMap.processComposite(min_confidence=0.1, min_overlap_fraction=0.1)
 

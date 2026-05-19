@@ -116,7 +116,8 @@ class FilamentMap:
             try:
                 img = hdu[0].data
                 OrigData[img < min_intensity] = 0
-            except Exception:
+            except Exception as e:
+                logger.warning("Could not load probability map for min_intensity masking (%s) — falling back to OrigData mask", e)
                 OrigData[OrigData < min_intensity] = 0
     
         self.ProbabilityMap = np.zeros_like(OrigData)
@@ -503,7 +504,7 @@ class FilamentMap:
         return cropped_image
     
 
-    def runSoaxThreads(self, min_snake_length_ss, min_fg_int, batch_path):
+    def runSoaxThreads(self, min_snake_length_ss, min_fg_int, batch_path, soax_timeout_min=35):
 
         """
         Create 5 threads to run soax in 5 pairs of 2
@@ -512,54 +513,51 @@ class FilamentMap:
         - min_snake_length_ss (float): minimum length for a filament in the shortest scale (ss) in pixels such that soax keeps it
         - min_fg_int (float): minim foreground intensity on a scale of 65535 for soax to intialize a snake
         - batch_path (str): Path to the soax batch file
+        - soax_timeout_min (float): per-run timeout in minutes; individual runs that exceed this are
+          aborted and logged but do not stop the pipeline
         """
 
-        #Soax params found through trial and error
         stretch_start = 1.75
         stretch_stop = 2.5
 
-
-        # Scale down minimum snake length by √BlockFactor×4 to preserve physical length after blocking
         new_length = round(min_snake_length_ss - ((math.sqrt(self.BlockFactor))*4))
         self.updateMinimumSnakeLength(new_length, min_fg_int)
-        logger.info("Starting SOAX threads (min_snake_length=%d)", new_length)
+        logger.debug("Starting SOAX threads (min_snake_length=%d)", new_length)
 
-
-        #begin 5 threads to speed up soax
         threads = []
-
         for i in range(5):
             t = threading.Thread(target=self.runSoax, kwargs={
-                "ridge_start": .02375 + i*0.0075, 
-                "ridge_stop": .03 + i*0.0075, 
-                "stretch_start": stretch_start, 
-                "stretch_stop": stretch_stop, 
-                "batch_path": batch_path})
+                "ridge_start": .02375 + i*0.0075,
+                "ridge_stop": .03 + i*0.0075,
+                "stretch_start": stretch_start,
+                "stretch_stop": stretch_stop,
+                "batch_path": batch_path,
+                "soax_timeout_min": soax_timeout_min,
+            })
             threads.append(t)
             t.start()
 
         for t in threads:
             t.join()
 
-        logger.info("All SOAX threads complete")
+        logger.info("SOAX complete: %s", self.FitsFile)
 
         
 
-    def runSoax(self, ridge_start, ridge_stop, stretch_start, stretch_stop, batch_path):
+    def runSoax(self, ridge_start, ridge_stop, stretch_start, stretch_stop, batch_path, soax_timeout_min=35):
 
         """
-        Runs soax batch file and then turns the soax .txt file into a Fits file in the dimensions of the original image. 
-        Lines are interpolated between points in the blocked image to transfrom back into the original image size. 
+        Runs soax batch file and then turns the soax .txt file into a Fits file in the dimensions of the original image.
+        Lines are interpolated between points in the blocked image to transform back into the original image size.
 
         Parameters:
-        - ridge_start (float): starting ridge thresholf value for soax run
-        - ridge_stop(float): stopping ridge threshold value for soax run
+        - ridge_start (float): starting ridge threshold value for soax run
+        - ridge_stop (float): stopping ridge threshold value for soax run
         - stretch_start (float): starting stretch factor value for soax run
         - stretch_stop (float): stopping stretch factor value for soax run
-        - batch_path (str): path to the soax batch file 
-
+        - batch_path (str): path to the soax batch file
+        - soax_timeout_min (float): hard timeout in minutes for this individual run
         """
-
 
         input_image = Path(f"{self.BaseDir}/{self.Label}/BlockedPng/{self.FitsFileStem}_Blocked.png")
         batch = batch_path
@@ -572,15 +570,23 @@ class FilamentMap:
         except AssertionError as e:
             logger.error("Path assertion failed: %s", e)
             return
-            
-        logger.debug("Running SOAX (ridge %.4f–%.4f)", ridge_start, ridge_stop)
-        cmdString = f'"{batch}" soax -i "{input_image}" -p "{self.ParamFile}" -s "{output_dir}" --ridge {ridge_start} 0.0075 {ridge_stop} --stretch {stretch_start} 0.5 {stretch_stop}'
-        with open(os.devnull, 'w') as devnull:
-            subprocess.run(cmdString, shell=True, stdout=devnull, stderr=devnull)
 
-        # ridge_start is embedded in SOAX output filenames, used to match results to this thread
+        cmdString = f'"{batch}" soax -i "{input_image}" -p "{self.ParamFile}" -s "{output_dir}" --ridge {ridge_start} 0.0075 {ridge_stop} --stretch {stretch_start} 0.5 {stretch_stop}'
+        try:
+            with open(os.devnull, 'w') as devnull:
+                subprocess.run(cmdString, shell=True, stdout=devnull, stderr=devnull,
+                               timeout=soax_timeout_min * 60)
+        except subprocess.TimeoutExpired:
+            logger.error(
+                "TIMEOUT ABORT -- SOAX | label: %s | scale: %s | "
+                "ridge: %.4f-%.4f | stretch: %.2f-%.2f | waited %g min",
+                self.Label, self.Scale,
+                ridge_start, ridge_stop, stretch_start, stretch_stop,
+                soax_timeout_min,
+            )
+            return
+
         self._convertSoaxToFits(output_dir, ridge_start)
-        logger.debug("SOAX -> FITS conversion complete (ridge %.4f)", ridge_start)
 
 
     def updateMinimumSnakeLength(self, new_length, min_fg_int):
@@ -804,7 +810,7 @@ class FilamentMap:
             return
 
         max_presence = len(images)
-        logger.info("Composite built from %d SOAX images for %s at scale %s", max_presence, self.Label, self.Scale)
+        logger.debug("Composite built from %d SOAX images for %s at scale %s", max_presence, self.Label, self.Scale)
 
         # Normalize composite data to the range [0, 255] for grayscale representation
         composite_data = (composite_data / max_presence * 255).astype(np.uint8)
@@ -1229,7 +1235,7 @@ class FilamentMap:
         min_skel_length = max(1, round(base_length - math.sqrt(self.BlockFactor) * 4))
         block           = self.BlockFactor if self.BlockFactor != 0 else 1
         effective_ar    = min_skel_length * block * self.Scalepix / 16.0
-        logger.info(
+        logger.debug(
             "BlockFactor=%d -> base_length=%d px -> min_skel_length=%d blocked-px "
             "-> effective aspect ratio=%.1f for %s",
             self.BlockFactor, base_length, min_skel_length, effective_ar, self.FitsFile,
@@ -1251,7 +1257,7 @@ class FilamentMap:
             label_val += 10
 
         imgNew = np.rint(imgNew).astype(int)
-        logger.info("Initial detection — max label: %d, filaments: %d", label_val, label_val // 10)
+        logger.debug("Initial detection — max label: %d, filaments: %d", label_val, label_val // 10)
 
         segment_info_reprojected = {}
         skipped = 0
@@ -1285,7 +1291,8 @@ class FilamentMap:
                 seg_map    = detect_sources(chopped_float, threshold=0.5, npixels=min_skel_length)
                 sub_labels = seg_map.labels
                 seg_data   = seg_map.data
-            except Exception:
+            except Exception as e:
+                logger.warning("detect_sources failed on segment (label region skipped): %s", e)
                 skipped += 1
                 continue
 
@@ -1304,7 +1311,7 @@ class FilamentMap:
                 imgNew[seg_mask] = label_val
                 label_val += 10
 
-        logger.info("After junction removal — %d segments kept, %d skipped", len(segment_info_reprojected), skipped)
+        logger.debug("After junction removal — %d segments kept, %d skipped", len(segment_info_reprojected), skipped)
 
         color_map_rgb = np.zeros((*imgNew.shape, 3), dtype=np.uint8)
         rng = np.random.default_rng()
@@ -1344,25 +1351,18 @@ class FilamentMap:
         - globalfactor (float): Median rescaling factor applied to the raw PSF model.
         - phot (astropy Table): PSFPhotometry result table with fitted positions and fluxes.
         """
-        # fwhmval = int(Scale/self.Scalepix)
-        fwhmval = int(16/self.Scalepix) #KEEP AN EYE HERE. 
+        fwhmval = int(16/self.Scalepix)
 
-
-        psf_model = CircularGaussianPRF(flux=1, fwhm=fwhmval)  # No longer divide fwhmval/2.35
-        psf_model.x_0.fixed = True  # allowing this to vary when x_coords, y_coords given no intentional offset shows most would only move by ~0.125 pix, so neglect any shift
+        psf_model = CircularGaussianPRF(flux=1, fwhm=fwhmval)
+        psf_model.x_0.fixed = True
         psf_model.y_0.fixed = True
         psf_model.fwhm.fixed = False
-        psf_model.flux.min = 0.0  #### -1. * np.std(noise)  # keep all models positive
-        psf_model.fwhm.max = fwhmval * 2.0  # do not allow the fwhm to encroach into next larger single scale interval
-        psf_model.fixed
+        psf_model.flux.min = 0.0
+        psf_model.fwhm.max = fwhmval * 2.0
 
         # For a filament (line of adjacent PSFs spaced 1 px apart), the centerline model
         # value equals F / (sqrt(2*pi) * sigma), so the correct per-source flux is:
         #   F = data[y,x] * sqrt(2*pi) * sigma
-        # This is the analytically derived factor for overlapping Gaussians, NOT the
-        # isolated point-source formula (2*pi*sigma^2), which would be ~3x too high.
-        # It also explains why the old net_scaling_factor=3.27 worked: it equalled
-        # sqrt(2*pi)*sigma for the original scalepix, hardcoded for one specific galaxy.
         sigma = fwhmval / 2.355
         y_coords, x_coords = np.where(coords_data > 0)
         flux_init = data[y_coords, x_coords] * np.sqrt(2.0 * np.pi) * sigma
@@ -1373,10 +1373,7 @@ class FilamentMap:
         init_params['y'] = y_coords + 0.0
         init_params['flux'] = flux_init
 
-
-        # Define PSF fitting region
-        psf_shape = (2 * int(np.ceil(fwhmval)) + 1, 2 * int(np.ceil(fwhmval)) + 1)
-        fit_shape = psf_shape
+        fit_shape = (2 * int(np.ceil(fwhmval)) + 1, 2 * int(np.ceil(fwhmval)) + 1)
 
         try:
             grouper = SourceGrouper(min_separation=1)
@@ -1384,23 +1381,25 @@ class FilamentMap:
             phot = psfphot(data, error=self.NoiseMap, init_params=init_params)
             tag = 'Grouped'
         except MemoryError:
+            logger.warning(
+                "MemoryError during grouped PSF fitting (%s, %d sources) — falling back to ungrouped",
+                self.FitsFile, len(init_params)
+            )
             psfphot = PSFPhotometry(psf_model, fit_shape, grouper=None, fitter_maxiters=2)
             phot = psfphot(data, error=self.NoiseMap, init_params=init_params)
             tag = 'NotGrouped'
-            
-        #model
+
         resid = psfphot.make_residual_image(data)
-        model = (data - resid)  # Model is data minus residuals
+        model = data - resid
 
-        #Scale model again
-        ratio=data[model != 0]/model[model != 0]
-        ratiouseful=ratio[(ratio>0.05) & (ratio<6.)]
-        ratiomean,ratiomedian,ratiostd=sigma_clipped_stats(ratiouseful, sigma=2, maxiters=5)
-        globalfactor=ratiomedian
+        ratio = data[model != 0] / model[model != 0]
+        ratiouseful = ratio[(ratio > 0.05) & (ratio < 6.)]
+        _, ratiomedian, _ = sigma_clipped_stats(ratiouseful, sigma=2, maxiters=5)
+        globalfactor = ratiomedian
         model = globalfactor * model
-        model_reprojected = self.reprojectWrapper(model, self.BlockHeader, self.OrigHeader, self.OrigData) 
+        model_reprojected = self.reprojectWrapper(model, self.BlockHeader, self.OrigHeader, self.OrigData)
 
-        if(write_fits):
+        if write_fits:
             out_path = Path(f"{self.BaseDir}/{self.Label}/SyntheticMap/{self.FitsFileStem}_SyntheticMap_{tag}.fits")
             hdu = fits.PrimaryHDU(model_reprojected, header=header)
             hdu.writeto(out_path, overwrite=True)
@@ -1442,7 +1441,7 @@ class FilamentMap:
             for file in os.listdir(dir_path):
                 galaxy = self.Label.split("_")[0]
                 if galaxy.lower() in file.lower() and alphaCO_tag.lower() in file.lower():
-                    logger.info("Using dynamic alphaCO map: %s", file)
+                    logger.debug("Using dynamic alphaCO map: %s", file)
                     fits_path = os.path.join(dir_path, file)
 
                     with fits.open(fits_path, ignore_missing=True) as hdul:
@@ -1487,7 +1486,7 @@ class FilamentMap:
                         n_replaced = np.count_nonzero(can_replace)
                         n_remaining = np.count_nonzero(cannot_replace)
 
-                        logger.info("Replaced %d NaN pixel(s) in Molecular_Mass.", n_replaced)
+                        logger.debug("Replaced %d NaN pixel(s) in Molecular_Mass.", n_replaced)
                         if n_remaining:
                             logger.warning("%d pixel(s) remain NaN — replacement values not finite.", n_remaining)
                     found_alphaCO = True
@@ -1523,7 +1522,7 @@ class FilamentMap:
         - SurfaceDensityMass (ndarray): Pixel-level molecular mass map for surface density output.
         - segment_info_reprojected (dict): Filament dictionary from createFilamentDictionary.
         """
-        logger.info("Converting %d filaments to CSV at scale %s", len(segment_info_reprojected), Scale)
+        logger.debug("Converting %d filaments to CSV at scale %s", len(segment_info_reprojected), Scale)
         csv_data = {}
 
         Line_Density = []
@@ -1687,7 +1686,7 @@ class FilamentMap:
         - min_aspect_ratio (float): Minimum filament length-to-width ratio for detection.
         """
 
-        logger.info("Beginning PSF synthetic map: %s", self.FitsFile)
+        logger.info("PSF synthetic map: %s", self.FitsFile)
         fits_path = os.path.join(self.BaseDir, self.Label, "CDD")
         fits_path = os.path.join(fits_path, self.FitsFile if self.FitsFile.endswith(".fits") else self.FitsFile + ".fits")
 
@@ -1737,7 +1736,7 @@ class FilamentMap:
         - write_fits (bool): Whether to save the synthetic map to SyntheticMap/.
         - min_aspect_ratio (float): Minimum filament length-to-width ratio for detection.
         """
-        logger.info("Beginning LSE approximate synthetic map: %s", self.FitsFile)
+        logger.debug("Beginning LSE approximate synthetic map: %s", self.FitsFile)
         fits_path = os.path.join(self.BaseDir, self.Label, "CDD")
         fits_path = os.path.join(fits_path, self.FitsFile if self.FitsFile.endswith(".fits") else self.FitsFile + ".fits")
 
