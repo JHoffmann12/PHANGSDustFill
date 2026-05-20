@@ -142,7 +142,8 @@ def getMinSnakeLengthFromAspectRatio(min_aspect_ratio, ref_scale_pc=16.0, ref_sc
 
 
 def setUpGalaxy(base_dir, label_folder_path, label, distance_Mpc, pixscale,
-                param_file_path, noise_min, flatten_perc, min_intensity, sSFR, Inclination):
+                param_file_path, noise_min, flatten_perc, min_intensity, sSFR, Inclination,
+                min_power=None, max_power=None):
     """Construct a FilamentMap object for each scale-decomposed image of a galaxy.
 
     Parameters
@@ -167,12 +168,25 @@ def setUpGalaxy(base_dir, label_folder_path, label, distance_Mpc, pixscale,
     CDD_folder = os.path.join(label_folder_path, "CDD")
 
     for fits_file in os.listdir(CDD_folder):
-        if fits_file.endswith(".fits"):
-            ScalePix = pixscale * 4.848 * distance_Mpc
-            filMap = FilamentMap.FilamentMap(ScalePix, base_dir, label_folder_path, fits_file, label, param_file_path, flatten_perc, min_intensity, sSFR, Inclination)
-            filMap.setBlockData()
-            filMap.setBkgSubDivRMS(noise_min)
-            FilamentMapList.append(filMap)
+        if not fits_file.endswith(".fits"):
+            continue
+        if min_power is not None or max_power is not None:
+            m = re.search(r'CDDss(\d+)pc', fits_file)
+            if m:
+                scale_pc = int(m.group(1))
+                if min_power is not None and scale_pc < 2 ** min_power:
+                    logger.info("Skipping %s: scale %d pc below min %d pc (2^%d)",
+                                fits_file, scale_pc, 2**min_power, min_power)
+                    continue
+                if max_power is not None and scale_pc > 2 ** max_power:
+                    logger.info("Skipping %s: scale %d pc above max %d pc (2^%d)",
+                                fits_file, scale_pc, 2**max_power, max_power)
+                    continue
+        ScalePix = pixscale * 4.848 * distance_Mpc
+        filMap = FilamentMap.FilamentMap(ScalePix, base_dir, label_folder_path, fits_file, label, param_file_path, flatten_perc, min_intensity, sSFR, Inclination)
+        filMap.setBlockData()
+        filMap.setBkgSubDivRMS(noise_min)
+        FilamentMapList.append(filMap)
 
     return FilamentMapList
 
@@ -363,7 +377,11 @@ def renameFitsFiles(base_dir, csv_path, ID_set=False):
 
         suffix    = "_starsub" if "starsub" in filename.lower() else ""
         base_name = f"{label}_{band}_{telescope}_{img_type}{suffix}"
-        new_filename = f"{base_name}_{image_id}.fits" if image_id else f"{base_name}.fits"
+        # Only append image_id if it won't duplicate a token already in base_name
+        if image_id and not base_name.endswith(f"_{image_id}"):
+            new_filename = f"{base_name}_{image_id}.fits"
+        else:
+            new_filename = f"{base_name}.fits"
 
         new_filepath = os.path.join(fits_file_folder_path, new_filename)
         os.rename(full_file_path, new_filepath)

@@ -164,7 +164,12 @@ class FilamentMap:
         - processed_img (ndarray): Rescaled image ready for SOAX ingestion.
         """
 
-        if 'Extinction' in fits_file: 
+        if 'Extinction' in fits_file:
+            eq_path = Path(f"{self.BaseDir}/{self.Label}/BkgSubDivRMS/{self.FitsFileStem}_BkgSubDivRMS_Eq.fits")
+            if eq_path.exists():
+                logger.info("Reusing existing hist-eq: %s", eq_path.name)
+                with fits.open(eq_path) as h:
+                    return np.array(h[0].data)
             print('Equalizing image')
             Scale = self._getScale(fits_file)
             Scale = Scale.replace("pc", '')
@@ -187,7 +192,20 @@ class FilamentMap:
             processed_img = rank.equalize(image, footprint, mask=maskfoot)
             outhdu = fits.PrimaryHDU(data=processed_img)
             out_path = Path(f"{self.BaseDir}/{self.Label}/BkgSubDivRMS/{self.FitsFileStem}_BkgSubDivRMS_Eq.fits")
-            outhdu.writeto(out_path ,overwrite=True)
+            outhdu.writeto(out_path, overwrite=True)
+
+            # Save PNG of the histogram-equalized image to Figures
+            fig_dir = Path(f"{self.BaseDir}/Figures")
+            fig_dir.mkdir(exist_ok=True)
+            import matplotlib
+            import matplotlib.pyplot as _plt
+            _fig, _ax = _plt.subplots(figsize=(8, 8))
+            _ax.imshow(processed_img, cmap="gray", origin="lower")
+            _ax.axis("off")
+            _ax.set_title(f"{self.Label} {self.Scale} -- Histogram Equalized", fontsize=10)
+            _fig.savefig(fig_dir / f"HistEq_{self.Label}_{self.Scale}.png",
+                         dpi=150, bbox_inches="tight")
+            _plt.close(_fig)
         else:
             if skip_flatten:
                 flatten_threshold = None
@@ -318,10 +336,10 @@ class FilamentMap:
         final_mask = dilated_mask == 255  # Convert back to boolean
 
         # Visualization (optional)
-        plt.imshow(np.uint8(final_mask) * 255, cmap='gray')
-        plt.title(f"Mask of {self.Label} at {self.Scale}")
-        plt.savefig(Path(f"{self.BaseDir}/Figures/Mask_{self.Label}_{self.Scale}.png"))
-        plt.close()
+        # plt.imshow(np.uint8(final_mask) * 255, cmap='gray')
+        # plt.title(f"Mask of {self.Label} at {self.Scale}")
+        # plt.savefig(Path(f"{self.BaseDir}/Figures/Mask_{self.Label}_{self.Scale}.png"))
+        # plt.close()
 
         return final_mask
 
@@ -516,6 +534,11 @@ class FilamentMap:
         - soax_timeout_min (float): per-run timeout in minutes; individual runs that exceed this are
           aborted and logged but do not stop the pipeline
         """
+
+        output_dir = Path(f"{self.BaseDir}/{self.Label}/SOAXOutput/{self.Scale}")
+        if list(output_dir.glob(f"*{self.FitsFileStem}*.fits")):
+            logger.info("Reusing existing SOAX output for %s at %s", self.Label, self.Scale)
+            return
 
         stretch_start = 1.75
         stretch_stop = 2.5
@@ -944,7 +967,7 @@ class FilamentMap:
 
         # Plot histogram
         plt.figure(figsize=(8, 6))
-        plt.hist(noise, bins=20, color='blue', edgecolor='black')
+        plt.hist(noise, bins=20, color='red', edgecolor='darkred')
         plt.title(f'noise histogram for {self.Label} at {self.Scale} with artificially set minimum of {noise_min} and zero removed)')
         plt.xlabel('noise')
         plt.ylabel('Frequency')
@@ -1061,7 +1084,7 @@ class FilamentMap:
 
         return fil_centers, coords_data
 
-    def processComposite(self, min_confidence=0.1, min_overlap_fraction=0.1):
+    def processComposite(self, min_confidence=0.1, min_overlap_fraction=0.1, write_fits=True):
         """
         Process and reconcile multiple SOAX filament detections into filtered composite and junction-removed filament skeleton maps.
 
@@ -1179,6 +1202,14 @@ class FilamentMap:
         # ---------------------------------------------------
 
         self.Composite = coords_data
+
+        if write_fits:
+            comp_dir = Path(f"{self.BaseDir}/{self.Label}/Composites")
+            comp_dir.mkdir(exist_ok=True)
+            comp_path = comp_dir / f"{self.FitsFileStem}_ProcessedComposite.fits"
+            fits.PrimaryHDU(data=coords_data.astype(np.uint8)).writeto(
+                comp_path, overwrite=True)
+            logger.debug("ProcessedComposite saved: %s", comp_path)
 
         # ---------------------------------------------------
         # Remove filament junctions/intersections

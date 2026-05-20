@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls \"C:\\\\Users\\\\jhoffm72\\\\Documents\\\\FilPHANGS\\\\Data\\\\ngc0628_F770W\" 2>&1)",
+      "Read(//c/Users/jhoffm72/Documents/FilPHANGS/Data/ngc0628_F770W/**)"
+    ]
+  }
+}

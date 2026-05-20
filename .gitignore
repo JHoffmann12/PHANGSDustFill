@@ -7,3 +7,6 @@ nan_mask.fits
 *.fits 
 *.log
 AppendixTables.txt
+Fils_obsdata_public.csv
+simfils_p12025.csv
+hacarplot.py
