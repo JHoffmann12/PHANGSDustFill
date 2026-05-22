@@ -270,7 +270,7 @@ def createDirectoryStructure(base_directory, csv_path, ID_set=False):
         if not filename.endswith('.fits'):
             continue
 
-        match = re.match(r"(.+?)_(F\d+[A-Z])[_.]", filename)
+        match = re.match(r"(.+?)_([A-Z][A-Z0-9]+)[_.]", filename)
         if not match:
             logger.warning("Could not parse filename: %s", filename)
             continue

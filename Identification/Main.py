@@ -84,7 +84,7 @@ if __name__ == "__main__":
     # -------------------------------------------------------------------------
     # todo = ['1512', '1566', '2835', '3351', '3627', '4254', '4303', '4321', '4535', '5068', '7496']
     todo = ['4254', '4303', '1433'] 
-    todo = ['0628']
+    todo = ['IC5146']
     # -------------------------------------------------------------------------
 
 
@@ -108,7 +108,7 @@ if __name__ == "__main__":
             continue
 
         # Skip non-galaxy folders
-        if label in ('OriginalMiriImages', 'Figures') or 'IC5146' in label or 'masks_v5' in label: # or not '0628_F770W' in label: 
+        if label in ('OriginalMiriImages', 'Figures') or 'masks_v5' in label:
             continue
 
         # Uncomment to process only a subset:
@@ -145,13 +145,13 @@ if __name__ == "__main__":
             filMap.scaleBkgSubDivRMSMap(write_fits=True)
             filMap.runSoaxThreads(min_snake_length_ss, min_fg_int, batch_path, soax_timeout_min=soax_timeout_min)
             filMap.createComposite(write_fits=True)
-            rep_centers = filMap.processComposite(min_confidence=0.8, min_overlap_fraction=0.1, write_fits = True)
+            rep_centers = filMap.processComposite(min_confidence=0.1, min_overlap_fraction=0.1, write_fits = True)
 
             # PSF-based synthetic map + property extraction (primary pipeline)
             # filMap.getSyntheticFilamentMapExact(min_scale=2**min_power, rep_centers=rep_centers, alphaCO_tag='SL24', use_dynamic_alphaCO=dynamic_alphaCO_path, use_Regions=region_dir_path, extract_Properties=True, write_fits=True, min_aspect_ratio=min_aspect_ratio)
 
             # LSE approximate synthetic map (faster, less accurate — uncomment to use instead)
-            # filMap.getSyntheticFilamentMapApprox(min_scale=2**min_power, rep_centers=rep_centers, alphaCO_tag='SL24', use_dynamic_alphaCO=dynamic_alphaCO_path, use_Regions=region_dir_path, extract_Properties=False, write_fits=True, min_aspect_ratio=min_aspect_ratio)
+            filMap.getSyntheticFilamentMapApprox(min_scale=2**min_power, rep_centers=rep_centers, alphaCO_tag='SL24', use_dynamic_alphaCO=dynamic_alphaCO_path, use_Regions=region_dir_path, extract_Properties=False, write_fits=True, min_aspect_ratio=min_aspect_ratio)
 
             # Legacy SOAX-composite processing (uncomment to use instead of PSF pipeline)
 
