@@ -145,7 +145,7 @@ if __name__ == "__main__":
             filMap.scaleBkgSubDivRMSMap(write_fits=True)
             filMap.runSoaxThreads(min_snake_length_ss, min_fg_int, batch_path, soax_timeout_min=soax_timeout_min)
             filMap.createComposite(write_fits=True)
-            rep_centers = filMap.processComposite(min_confidence=0.1, min_overlap_fraction=0.1, write_fits = True)
+            rep_centers = filMap.processComposite(min_confidence=0.8, min_overlap_fraction=0.1, write_fits = True)
 
             # PSF-based synthetic map + property extraction (primary pipeline)
             # filMap.getSyntheticFilamentMapExact(min_scale=2**min_power, rep_centers=rep_centers, alphaCO_tag='SL24', use_dynamic_alphaCO=dynamic_alphaCO_path, use_Regions=region_dir_path, extract_Properties=True, write_fits=True, min_aspect_ratio=min_aspect_ratio)
