@@ -83,8 +83,9 @@ if __name__ == "__main__":
 
     # -------------------------------------------------------------------------
     # todo = ['1512', '1566', '2835', '3351', '3627', '4254', '4303', '4321', '4535', '5068', '7496']
-    todo = ['4254', '4303', '1433'] 
-    todo = ['IC5146']
+    # todo = ['4254', '4303', '1433'] 
+    # todo = ['IC5146']
+    not_todo = ['IC5146','0628','2090','1087','1300','1365','1385','1433','1512','1566']
     # -------------------------------------------------------------------------
 
 
@@ -102,7 +103,7 @@ if __name__ == "__main__":
     mainFuncs.createDirectoryStructure(base_dir, csv_path)
 
     for label in os.listdir(base_dir):
-
+        print(label)
         label_folder_path = os.path.join(base_dir, label)
         if not os.path.isdir(label_folder_path):
             continue
@@ -112,7 +113,10 @@ if __name__ == "__main__":
             continue
 
         # Uncomment to process only a subset:
-        if not any(t in label for t in todo):
+        # if not any(t in label for t in todo):
+        #     continue
+
+        if any(t in label for t in not_todo):
             continue
 
         info = mainFuncs.getInfo(label, csv_path)
@@ -148,10 +152,10 @@ if __name__ == "__main__":
             rep_centers = filMap.processComposite(min_confidence=0.1, min_overlap_fraction=0.1, write_fits = True)
 
             # PSF-based synthetic map + property extraction (primary pipeline)
-            # filMap.getSyntheticFilamentMapExact(min_scale=2**min_power, rep_centers=rep_centers, alphaCO_tag='SL24', use_dynamic_alphaCO=dynamic_alphaCO_path, use_Regions=region_dir_path, extract_Properties=True, write_fits=True, min_aspect_ratio=min_aspect_ratio)
+            filMap.getSyntheticFilamentMapExact(min_scale=2**min_power, rep_centers=rep_centers, alphaCO_tag='SL24', use_dynamic_alphaCO=dynamic_alphaCO_path, use_Regions=region_dir_path, extract_Properties=True, write_fits=True, min_aspect_ratio=min_aspect_ratio)
 
             # LSE approximate synthetic map (faster, less accurate — uncomment to use instead)
-            filMap.getSyntheticFilamentMapApprox(min_scale=2**min_power, rep_centers=rep_centers, alphaCO_tag='SL24', use_dynamic_alphaCO=dynamic_alphaCO_path, use_Regions=region_dir_path, extract_Properties=False, write_fits=True, min_aspect_ratio=min_aspect_ratio)
+            # filMap.getSyntheticFilamentMapApprox(min_scale=2**min_power, rep_centers=rep_centers, alphaCO_tag='SL24', use_dynamic_alphaCO=dynamic_alphaCO_path, use_Regions=region_dir_path, extract_Properties=False, write_fits=True, min_aspect_ratio=min_aspect_ratio)
 
             # Legacy SOAX-composite processing (uncomment to use instead of PSF pipeline)
 

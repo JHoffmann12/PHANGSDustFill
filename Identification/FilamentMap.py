@@ -1654,7 +1654,7 @@ class FilamentMap:
         log_C_F770W = -0.21 * (np.log10(sSFR) + 10.14)
         valid_mask_1 = I_F770W_16pc > 0
         x = np.zeros_like(I_F770W_16pc)
-        x[valid_mask_1] = np.log(I_F770W_16pc[valid_mask_1]) - log_C_F770W
+        x[valid_mask_1] = np.log10(I_F770W_16pc[valid_mask_1]) - log_C_F770W #np.log before
         log_I_CO_2_1_16pc = 0.88 * (x - 1.44) + 1.36
         I_CO__2_1_16pc = 10**log_I_CO_2_1_16pc
         I_CO__2_1_16pc[~valid_mask_1] = 0
